@@ -1,0 +1,42 @@
+appId: com.workbuddy.apkdiff
+productName: APK Diff Tool
+copyright: Copyright © 2026 WorkBuddy
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+  - "!**/*.ts"
+  - "!src"
+  - "!shared"
+  - "!electron"
+  - "!**/node_modules/*/{test,tests}"
+  - "!**/node_modules/**/README.md"
+  - "!**/node_modules/**/CHANGELOG.md"
+  - "!**/node_modules/**/LICENSE"
+  - "!tools/*.jar"
+  - "!release"
+
+asarUnpack:
+  - "**/*.node"
+
+extraResources: []
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${name}-${version}-Setup.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: APK Diff Tool

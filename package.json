@@ -1,0 +1,53 @@
+{
+  "name": "apk-diff-tool",
+  "productName": "APK Diff Tool",
+  "version": "1.0.0",
+  "description": "Desktop tool that decompiles two APK files with apktool and visually compares permissions, AndroidManifest metadata, smali code and resource files.",
+  "main": "dist-electron/electron/main.js",
+  "private": true,
+  "author": "APK Diff Tool",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:main": "tsc -p tsconfig.node.json",
+    "build:renderer": "vite build",
+    "build": "npm run build:main && npm run build:renderer",
+    "dev:renderer": "vite",
+    "dev:main": "npm run build:main && cross-env NODE_ENV=development electron .",
+    "dev": "concurrently -k -n RENDERER,MAIN \"npm:dev:renderer\" \"npm:dev:main\"",
+    "preview": "vite preview",
+    "dist": "npm run build && electron-builder --win",
+    "dist:dir": "npm run build && electron-builder --dir",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "@mui/icons-material": "^5.15.20",
+    "@mui/material": "^5.15.20",
+    "@emotion/react": "^11.11.4",
+    "@emotion/styled": "^11.11.5",
+    "adm-zip": "^0.5.14",
+    "diff": "^5.2.0",
+    "xmldoc": "^1.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.15",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/diff": "^5.0.9",
+    "@types/adm-zip": "^0.5.5",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "^31.2.1",
+    "electron-builder": "^25.0.5",
+    "tailwindcss": "^3.4.10",
+    "postcss": "^8.4.41",
+    "autoprefixer": "^10.4.19",
+    "typescript": "^5.5.4",
+    "vite": "^5.3.5"
+  }
+}

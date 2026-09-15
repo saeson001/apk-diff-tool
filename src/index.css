@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: #f5f7fa;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  color: #1f2937;
+}
+
+/* diff 行样式 */
+.diff-line {
+  font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 0 12px;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.diff-line.add {
+  background: #e6f4ea;
+  border-left: 3px solid #2e7d32;
+  color: #1b5e20;
+}
+
+.diff-line.del {
+  background: #fdecea;
+  border-left: 3px solid #c62828;
+  color: #b71c1c;
+}
+
+.diff-line.ctx {
+  background: #ffffff;
+  border-left: 3px solid transparent;
+  color: #4b5563;
+}
+
+.diff-line.hunk {
+  background: #f3e5f5;
+  border-left: 3px solid #7b1fa2;
+  color: #4a148c;
+  font-weight: 600;
+  padding: 4px 12px;
+}
+
+.diff-line.header {
+  background: #eceff1;
+  border-left: 3px solid #546e7a;
+  color: #37474f;
+  font-weight: 600;
+  padding: 4px 12px;
+}
+
+/* 拖拽样式 */
+.drop-zone {
+  border: 2px dashed #cbd5e1;
+  border-radius: 8px;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.drop-zone:hover, .drop-zone.drag-over {
+  border-color: #1976d2;
+  background: #e3f2fd;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
