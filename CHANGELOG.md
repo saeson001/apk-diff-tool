@@ -2,6 +2,20 @@
 
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本（SemVer）。
 
+## [1.0.1] - 2026-09-16
+
+### 修复
+
+- **P0**：smali / res diff 内容不可见——点击文件名后右侧区域空白。根因：
+  - `maxHeight: calc(100vh - 360px)` 硬编码，但顶部组件（AppBar + UploadPanel + SummaryPanel + Tabs）实际总高度约 480px，diff 区域被压缩到几乎不可见
+  - CSS `.diff-line` 的 `padding: 0 12px` 和 `overflow-x: auto` 与 JSX flex 布局冲突，padding 挤占 flex 子项空间
+  - Paper 缺少 `overflow: 'hidden'`，子元素溢出但不可见
+- 修复方案：
+  - 改用 `flex: 1, height: 0` 让 diff 区域自适应父容器剩余空间，替代硬编码 maxHeight
+  - Paper 添加 `overflow: 'hidden'`，内层 Box 添加 `display: 'flex', flexDirection: 'column'`
+  - CSS `.diff-line` 移除 `padding` 和 `overflow-x`（改由 JSX 的 pl/pr 控制）
+  - 添加 `alignItems: 'baseline'` 让行号与文本基线对齐
+
 ## [1.0.0] - 2026-09-15
 
 首个公开版本。
