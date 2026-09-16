@@ -19,9 +19,7 @@ body {
   font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
   font-size: 12px;
   line-height: 1.5;
-  padding: 0 12px;
   white-space: pre;
-  overflow-x: auto;
 }
 
 .diff-line.add {
@@ -47,7 +45,6 @@ body {
   border-left: 3px solid #7b1fa2;
   color: #4a148c;
   font-weight: 600;
-  padding: 4px 12px;
 }
 
 .diff-line.header {
@@ -55,7 +52,6 @@ body {
   border-left: 3px solid #546e7a;
   color: #37474f;
   font-weight: 600;
-  padding: 4px 12px;
 }
 
 /* 拖拽样式 */
