@@ -18,8 +18,11 @@ import AdmZip from 'adm-zip';
 import type { DecompProgress } from '../shared/types';
 
 const APKTOOL_VERSION = '2.9.3';
-const APKTOOL_DOWNLOAD_URL =
-  `https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar`;
+const APKTOOL_DOWNLOAD_URLS = [
+  `https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar`,
+  `https://ghproxy.com/https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar`,
+  `https://mirror.ghproxy.com/https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar`,
+];
 
 interface ApkooleState {
   jarPath: string | null;
@@ -244,14 +247,25 @@ async function ensureApktoolJar(onProgress?: (pct: number) => void): Promise<str
     state.jarPath = jarPath;
     return jarPath;
   }
-  try {
-    await downloadFile(APKTOOL_DOWNLOAD_URL, jarPath, onProgress);
-    state.jarPath = jarPath;
-    return jarPath;
-  } catch (err) {
-    console.warn('[apk-worker] apktool download failed:', err);
-    return null;
+  // 尝试多个下载源，每个源最多重试 2 次
+  for (let attempt = 0; attempt < 2; attempt++) {
+    for (const url of APKTOOL_DOWNLOAD_URLS) {
+      try {
+        console.log(`[apk-worker] downloading apktool from ${url} (attempt ${attempt + 1})`);
+        await downloadFile(url, jarPath, onProgress);
+        if (fs.existsSync(jarPath) && fs.statSync(jarPath).size > 1_000_000) {
+          state.jarPath = jarPath;
+          return jarPath;
+        }
+      } catch (err) {
+        console.warn(`[apk-worker] apktool download failed from ${url}:`, err);
+        // 清理不完整的下载
+        try { if (fs.existsSync(jarPath)) fs.unlinkSync(jarPath); } catch { /* noop */ }
+      }
+    }
   }
+  console.error('[apk-worker] all apktool download sources failed');
+  return null;
 }
 
 export async function getApktoolVersion(): Promise<string | null> {
