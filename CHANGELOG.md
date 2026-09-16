@@ -2,6 +2,18 @@
 
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本（SemVer）。
 
+## [1.0.2] - 2026-09-16
+
+### 修复
+
+- **P0**：降级模式下 XML 文件无法显示 diff 内容——只显示哈希+大小
+  - 根因：apktool.jar 下载失败（GitHub 被墙），降级为 adm-zip 直接解压，读到的是 APK 内的原始二进制 XML（Android binary XML format），不是 apktool 反编译后的文本 XML
+  - 二进制 XML 包含 null 字节，被 `isProbablyBinary` 识别为二进制，无法显示 diff
+- 修复方案：
+  - apktool.jar 下载增加重试机制（2 轮 × 3 个下载源 = 6 次尝试）
+  - 增加备用下载源：ghproxy.com、mirror.ghproxy.com（绕过 GitHub 被墙）
+  - 下载失败时清理不完整的文件，避免残留
+
 ## [1.0.1] - 2026-09-16
 
 ### 修复
