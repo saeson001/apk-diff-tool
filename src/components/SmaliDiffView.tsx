@@ -113,16 +113,16 @@ export default function SmaliDiffView({ classes, reportId }: Props) {
       return <Typography variant="body2" color="text.secondary" sx={{ p: 4 }}>无差异内容</Typography>;
     }
     return (
-      <Box sx={{ overflow: 'auto', maxHeight: 'calc(100vh - 360px)' }}>
+      <Box sx={{ flex: 1, overflow: 'auto', height: 0 }}>
         {parseDiffWithLineNumbers(diffText).map((p, i) => (
           <Box
             key={i}
             className={`diff-line ${p.kind}`}
-            sx={{ display: 'flex', fontFamily: 'monospace', fontSize: 13, lineHeight: 1.5 }}
+            sx={{ display: 'flex', fontFamily: 'monospace', fontSize: 13, lineHeight: 1.5, alignItems: 'baseline' }}
           >
             <LineNum n={p.origLine} />
             <LineNum n={p.modLine} />
-            <Box sx={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-all', pl: 1 }}>
+            <Box sx={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-all', pl: 1, pr: 1 }}>
               {p.text || '\u00a0'}
             </Box>
           </Box>
@@ -189,7 +189,7 @@ export default function SmaliDiffView({ classes, reportId }: Props) {
         </Box>
       </Paper>
 
-      <Paper sx={{ flex: 1, display: 'flex', flexDirection: 'column' }} variant="outlined">
+      <Paper sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }} variant="outlined">
         {selected ? (
           <>
             <Box sx={{ p: 1, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
@@ -211,7 +211,7 @@ export default function SmaliDiffView({ classes, reportId }: Props) {
             <Typography variant="body2" color="text.secondary">选择左侧类查看 diff</Typography>
           </Box>
         )}
-        <Box sx={{ flex: 1, overflow: 'hidden' }}>
+        <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {selected && renderDiff()}
         </Box>
       </Paper>
