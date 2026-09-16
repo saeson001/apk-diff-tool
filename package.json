@@ -1,7 +1,7 @@
 {
   "name": "apk-diff-tool",
   "productName": "APK Diff Tool",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Desktop tool that decompiles two APK files with apktool and visually compares permissions, AndroidManifest metadata, smali code and resource files.",
   "main": "dist-electron/electron/main.js",
   "private": true,
