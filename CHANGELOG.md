@@ -2,6 +2,27 @@
 
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本（SemVer）。
 
+## [1.0.3] - 2026-09-17
+
+### 修复
+
+- **P0**：关于菜单显示版本号硬编码为 1.0.0，未随 package.json 更新
+  - 修复：`electron/main.ts` 动态读取 `package.json` 的 `version` 字段
+- **P0**：v1.0.2 的 apktool 下载重试方案未生效，用户仍走降级模式（adm-zip）导致 XML 文件看不到 diff
+  - 根因：3 个下载源（github 直连 + ghproxy.com + mirror.ghproxy.com）在用户环境下全部失败
+  - 修复：
+    - 下载源从 3 个扩展到 7 个（新增 ghproxy.net、gh.llkk.cc、ghfast.top、github.moeyy.xyz）
+    - 完整性校验阈值从 1MB 提升到 5MB（apktool.jar 正常约 25MB），过滤不完整/损坏下载
+    - 下载进度回调，让用户看到每个源的尝试状态
+    - 清理上次下载失败的残留文件后重新下载
+
+### 改进
+
+- **UX**：降级模式下 UI 显示具体原因（如"apktool 下载失败"或"Java 未找到"），而非通用提示
+  - 新增 `DiffReport.fallbackReason` 字段
+  - SummaryPanel 警告文案改为包含具体原因 + 明确告知 XML 文件无法显示 diff
+  - 帮助用户判断是 apktool 问题还是 Java 问题，针对性解决
+
 ## [1.0.2] - 2026-09-16
 
 ### 修复
