@@ -2,12 +2,40 @@
 
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本（SemVer）。
 
+## [1.1.0] - 2026-09-18
+
+### 新增
+
+- **诊断信息面板**：工具栏新增"诊断"按钮，展示完整的路径、jar 搜索记录、Java 搜索记录
+  - 显示 exePath、appPath、userData、logFile 等关键路径
+  - 展示每个 jar 搜索候选路径的存在性、文件大小、ZIP 有效性
+  - 展示每个 Java 检测候选的路径和发现状态
+  - 状态概览：apktool jar 是否找到、Java 版本、打包模式
+
+- **日志系统**：新增 `electron/logger.ts`，所有关键操作写入日志文件
+  - 日志位置：`%APPDATA%/APK Diff Tool/logs/app-YYYY-MM-DD.log`
+  - 记录内容：jar 搜索路径/结果、Java 检测过程、下载尝试、反编译进度
+  - 同时输出到 console（开发调试）
+
+- **日志导出**：支持导出日志到用户指定位置
+  - 菜单"工具 → 导出日志…"
+  - 诊断面板内"导出日志"按钮
+  - 日志目录：`%APPDATA%/APK Diff Tool/logs/`，菜单"工具 → 打开日志目录"
+
+- **菜单增强**：新增"工具"菜单，包含诊断信息、打开日志目录、导出日志
+
+### 改进
+
+- `apk-worker.ts` 全量日志化：所有路径搜索、文件校验、下载操作都有详细日志
+- `getApktoolJarPath` 搜索路径记录到 `state.jarSearchLog`，供诊断面板展示
+- `findSystemJava` 搜索结果记录到 `state.javaSearchLog`，供诊断面板展示
+- 新增 `getDebugData()` 导出诊断数据
+
 ## [1.0.6] - 2026-09-17
 
 ### 修复
 
 - **P0**：v1.0.5 的 `isValidJar` 仅检查 ZIP 魔数（`PK\x03\x04`），截断/损坏的 jar 会误判为有效
-  - 根因：用户手动放置的 jar（3.9MB）虽有正确魔数但缺少 ZIP 中央目录（END header），是截断下载；v1.0.5 会接受该文件，导致 `java -jar` 反复失败后降级
   - 修复：`isValidJar` 改用 adm-zip 实际打开 ZIP 并读取条目列表，截断/损坏文件会抛异常被正确拒绝
   - 效果：损坏 jar 不再被误用，程序立即降级到纯 JS 二进制 XML 解析器，右上角状态清晰
 
