@@ -69,6 +69,7 @@ export function registerIpcHandlers(ipcMain: IpcMain): void {
     broadcastProgress(win, { phase: 'comparing', label: '正在对比…', progress: 96 });
 
     const usedFallback = resultOriginal.usedFallback || resultModified.usedFallback;
+    const fallbackReason = resultOriginal.fallbackReason || resultModified.fallbackReason;
     const report = await buildDiffReport({
       sessionId,
       originalApk,
@@ -76,7 +77,8 @@ export function registerIpcHandlers(ipcMain: IpcMain): void {
       originalDir: resultOriginal.outDir,
       modifiedDir: resultModified.outDir,
       apktoolVersion: ready.version,
-      usedFallback
+      usedFallback,
+      fallbackReason
     });
 
     sessions.set(sessionId, {
