@@ -12,6 +12,7 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { XMLDocument } from 'xmldoc';
 import { diffLines } from 'diff';
+import { parseManifestFromDir, isBinaryXmlBuffer, parseBinaryXmlBuffer, type ParsedManifest } from './binaryXmlParser';
 import type {
   DiffReport,
   PermissionRow,
@@ -258,6 +259,17 @@ function walkAllFiles(dir: string, extensions: Set<string>): Map<string, { abs: 
 function isProbablyBinary(abs: string): boolean {
   try {
     const buf = fs.readFileSync(abs);
+    // AndroidManifest.xml 在降级模式下是二进制 XML，但可解析为文本
+    if (path.basename(abs) === 'AndroidManifest.xml') {
+      if (isBinaryXmlBuffer(buf)) {
+        // 是二进制 XML — 可以解析，不算"纯二进制"
+        const parsed = parseBinaryXmlBuffer(buf);
+        if (parsed && (parsed.package || parsed.permissions.length > 0 || parsed.versionName)) {
+          return false; // 可解析，标记为文本
+        }
+        return true; // 二进制但解析失败
+      }
+    }
     // 前 4KB 里有 null 字节视为二进制
     const slice = buf.subarray(0, 4096);
     for (const b of slice) if (b === 0) return true;
@@ -436,6 +448,104 @@ const TEXT_EXTS = new Set([
   '.ttf', '.otf' // 部分 font 也走文本对比（虽然二进制，但通常不变）
 ]);
 
+// -------------------------------------------------------------------------
+// 二进制 XML 降级 diff（apktool 不可用时）
+// -------------------------------------------------------------------------
+
+function diffBinaryPermissions(
+  original: Array<{ name: string; maxSdkVersion: string | null; line: number }>,
+  modified: Array<{ name: string; maxSdkVersion: string | null; line: number }>
+): PermissionRow[] {
+  const oMap = new Map(original.map((p) => [p.name, p]));
+  const mMap = new Map(modified.map((p) => [p.name, p]));
+  const allNames = new Set([...oMap.keys(), ...mMap.keys()]);
+  const rows: PermissionRow[] = [];
+  for (const name of Array.from(allNames).sort()) {
+    const o = oMap.get(name);
+    const m = mMap.get(name);
+    if (!m) {
+      rows.push({ permission: name, status: 'removed', originalMaxSdk: o!.maxSdkVersion, modifiedMaxSdk: null, originalLine: o!.line });
+    } else if (!o) {
+      rows.push({ permission: name, status: 'added', originalMaxSdk: null, modifiedMaxSdk: m!.maxSdkVersion, modifiedLine: m!.line });
+    } else {
+      const maxSdkChanged = o.maxSdkVersion !== m.maxSdkVersion;
+      rows.push({
+        permission: name,
+        status: maxSdkChanged ? 'kept' : 'kept',
+        originalMaxSdk: o.maxSdkVersion,
+        modifiedMaxSdk: m.maxSdkVersion,
+        originalLine: o.line,
+        modifiedLine: m.line
+      });
+    }
+  }
+  return rows;
+}
+
+function diffBinaryManifestMeta(
+  original: ParsedManifest,
+  modified: ParsedManifest
+): ManifestElementDiff[] {
+  const fields: Array<{ key: string; o: string | null; m: string | null }> = [
+    { key: 'package', o: original.package, m: modified.package },
+    { key: 'versionCode', o: original.versionCode, m: modified.versionCode },
+    { key: 'versionName', o: original.versionName, m: modified.versionName },
+    { key: 'platformBuildVersionCode', o: original.platformBuildVersionCode, m: modified.platformBuildVersionCode },
+    { key: 'platformBuildVersionName', o: original.platformBuildVersionName, m: modified.platformBuildVersionName },
+    { key: 'installLocation', o: original.installLocation, m: modified.installLocation },
+    { key: 'uses-sdk.minSdkVersion', o: original.minSdkVersion, m: modified.minSdkVersion },
+    { key: 'uses-sdk.targetSdkVersion', o: original.targetSdkVersion, m: modified.targetSdkVersion },
+    { key: 'uses-sdk.maxSdkVersion', o: original.maxSdkVersion, m: modified.maxSdkVersion },
+    { key: 'application:label', o: original.applicationLabel, m: modified.applicationLabel },
+    { key: 'application:icon', o: original.applicationIcon, m: modified.applicationIcon },
+    { key: 'application:theme', o: original.applicationTheme, m: modified.applicationTheme },
+  ];
+  return fields.map((f) => {
+    const same = (f.o || '') === (f.m || '');
+    return {
+      field: f.key,
+      original: f.o,
+      modified: f.m,
+      status: same ? 'unchanged' as const : 'modified' as const
+    };
+  });
+}
+
+function diffComponentFromMaps(
+  type: ComponentType,
+  original: Map<string, { name: string; exported: boolean | null; enabled: boolean | null; line: number }>,
+  modified: Map<string, { name: string; exported: boolean | null; enabled: boolean | null; line: number }>
+): ComponentDiffResult {
+  const result: ComponentDiffResult = { type, added: [], removed: [], changed: [], unchangedCount: 0 };
+  const toEntry = (e: { name: string; exported: boolean | null; enabled: boolean | null; line: number }): ComponentEntry => ({
+    name: e.name, exported: e.exported ?? undefined, enabled: e.enabled ?? undefined, line: e.line
+  });
+  for (const [name, entry] of original) {
+    const m = modified.get(name);
+    if (!m) {
+      result.removed.push(toEntry(entry));
+    } else {
+      const changes: Array<{ field: string; from: string; to: string }> = [];
+      for (const f of ['exported', 'enabled'] as const) {
+        const x = String(entry[f] ?? '');
+        const y = String(m[f] ?? '');
+        if (x !== y) changes.push({ field: f, from: x, to: y });
+      }
+      if (changes.length > 0) {
+        result.changed.push({ name, changes, originalLine: entry.line, modifiedLine: m.line });
+      } else {
+        result.unchangedCount++;
+      }
+    }
+  }
+  for (const [name, entry] of modified) {
+    if (!original.has(name)) {
+      result.added.push(toEntry(entry));
+    }
+  }
+  return result;
+}
+
 export async function buildDiffReport(params: {
   sessionId: string;
   originalApk: string;
@@ -477,6 +587,31 @@ export async function buildDiffReport(params: {
       const map = parseComponents(mManifest!, t);
       return { type: t, added: Array.from(map.values()), removed: [], changed: [], unchangedCount: 0 };
     });
+  }
+
+  // 如果文本 XML 解析全部失败（apktool 降级模式，manifest 是二进制 XML），
+  // 尝试用纯 JS 二进制 XML 解析器提取 manifest 信息
+  if (!oManifest && !mManifest) {
+    const oBin = parseManifestFromDir(originalDir);
+    const mBin = parseManifestFromDir(modifiedDir);
+    if (oBin && mBin) {
+      console.log('[diff-engine] using binary XML parser for manifest diff');
+      // 权限 diff
+      permissions = diffBinaryPermissions(oBin.permissions, mBin.permissions);
+      // 元数据 diff
+      manifestDiff.meta = diffBinaryManifestMeta(oBin, mBin);
+      // 组件 diff
+      manifestDiff.components = COMPONENT_TYPES.map((t) => {
+        const typeKey = t === 'activity' ? 'activities' : t === 'service' ? 'services' : t === 'receiver' ? 'receivers' : 'providers';
+        const oList = (oBin as any)[typeKey] as Array<{ name: string; exported: boolean | null; enabled: boolean | null; line: number }>;
+        const mList = (mBin as any)[typeKey] as Array<{ name: string; exported: boolean | null; enabled: boolean | null; line: number }>;
+        const oMap = new Map(oList.map((c) => [c.name, c]));
+        const mMap = new Map(mList.map((c) => [c.name, c]));
+        return diffComponentFromMaps(t, oMap, mMap);
+      });
+    } else {
+      console.warn('[diff-engine] binary XML parsing failed, manifest diff unavailable');
+    }
   }
 
   // smali
@@ -565,9 +700,81 @@ export function getResourceUnifiedDiff(
   return makeUnifiedDiff(oText || '', mText || '').patch;
 }
 
+/** 将二进制 XML manifest 转为可读文本表示，用于 diff 展示 */
+function binaryManifestToText(m: ParsedManifest): string {
+  const lines: string[] = [];
+  lines.push(`<manifest package="${m.package || ''}"`);
+  if (m.versionName) lines.push(`  android:versionName="${m.versionName}"`);
+  if (m.versionCode) lines.push(`  android:versionCode="${m.versionCode}"`);
+  if (m.platformBuildVersionCode) lines.push(`  android:platformBuildVersionCode="${m.platformBuildVersionCode}"`);
+  if (m.platformBuildVersionName) lines.push(`  android:platformBuildVersionName="${m.platformBuildVersionName}"`);
+  if (m.installLocation) lines.push(`  android:installLocation="${m.installLocation}"`);
+  lines.push('>');
+  if (m.minSdkVersion) lines.push(`  <uses-sdk android:minSdkVersion="${m.minSdkVersion}"`);
+  if (m.targetSdkVersion) lines.push(`    android:targetSdkVersion="${m.targetSdkVersion}"`);
+  if (m.maxSdkVersion) lines.push(`    android:maxSdkVersion="${m.maxSdkVersion}"/>`);
+  for (const p of m.permissions) {
+    if (p.maxSdkVersion) lines.push(`  <uses-permission android:name="${p.name}" android:maxSdkVersion="${p.maxSdkVersion}"/>`);
+    else lines.push(`  <uses-permission android:name="${p.name}"/>`);
+  }
+  if (m.applicationLabel || m.applicationIcon || m.applicationTheme) {
+    lines.push(`  <application`);
+    if (m.applicationLabel) lines.push(`    android:label="${m.applicationLabel}"`);
+    if (m.applicationIcon) lines.push(`    android:icon="${m.applicationIcon}"`);
+    if (m.applicationTheme) lines.push(`    android:theme="${m.applicationTheme}"`);
+    lines.push(`>`);
+    for (const a of m.activities) {
+      lines.push(`    <activity android:name="${a.name}"`);
+      if (a.exported !== null) lines.push(`      android:exported="${a.exported}"`);
+      if (a.enabled !== null) lines.push(`      android:enabled="${a.enabled}"`);
+      lines.push(`    />`);
+    }
+    for (const s of m.services) {
+      lines.push(`    <service android:name="${s.name}"`);
+      if (s.exported !== null) lines.push(`      android:exported="${s.exported}"`);
+      if (s.enabled !== null) lines.push(`      android:enabled="${s.enabled}"`);
+      lines.push(`    />`);
+    }
+    for (const r of m.receivers) {
+      lines.push(`    <receiver android:name="${r.name}"`);
+      if (r.exported !== null) lines.push(`      android:exported="${r.exported}"`);
+      if (r.enabled !== null) lines.push(`      android:enabled="${r.enabled}"`);
+      lines.push(`    />`);
+    }
+    for (const p of m.providers) {
+      lines.push(`    <provider android:name="${p.name}"`);
+      if (p.exported !== null) lines.push(`      android:exported="${p.exported}"`);
+      if (p.enabled !== null) lines.push(`      android:enabled="${p.enabled}"`);
+      if (p.authority) lines.push(`      android:authority="${p.authority}"`);
+      lines.push(`    />`);
+    }
+    for (const md of m.metaData) {
+      lines.push(`    <meta-data android:name="${md.name}"`);
+      if (md.value) lines.push(`      android:value="${md.value}"`);
+      lines.push(`    />`);
+    }
+    lines.push(`  </application>`);
+  }
+  lines.push('</manifest>');
+  return lines.join('\n');
+}
+
 function readMaybe(abs: string): string | null {
   if (!fs.existsSync(abs)) return null;
   try {
+    const buf = fs.readFileSync(abs);
+    // 检测是否为二进制 XML（AndroidManifest.xml 在降级模式下是二进制格式）
+    const basename = path.basename(abs);
+    if (basename === 'AndroidManifest.xml' && isBinaryXmlBuffer(buf)) {
+      try {
+        const parsed = parseBinaryXmlBuffer(buf);
+        if (parsed) {
+          return binaryManifestToText(parsed);
+        }
+      } catch {
+        // 解析失败，回退到原始文本读取
+      }
+    }
     return fs.readFileSync(abs, 'utf8');
   } catch {
     return null;
