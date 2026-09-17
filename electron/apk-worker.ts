@@ -58,14 +58,26 @@ function toolsDir(): string {
   return dir;
 }
 
-/** 验证 jar 文件是否为有效 ZIP（检查 PK\x03\x04 签名） */
+/**
+ * 验证 jar 文件是否为有效的 ZIP（apktool.jar 实际是 ZIP 格式）
+ * 1) 检查 PK\x03\x04 魔数
+ * 2) 尝试用 adm-zip 打开并读取条目列表（可捕获截断/损坏的 ZIP）
+ * 截断的下载（如只有 PK 头但缺少中央目录）会在此步被正确拒绝。
+ */
 function isValidJar(filePath: string): boolean {
   try {
+    // 1) 魔数检查
     const fd = fs.openSync(filePath, 'r');
     const buf = Buffer.alloc(4);
     fs.readSync(fd, buf, 0, 4, 0);
     fs.closeSync(fd);
-    return buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04;
+    if (!(buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04)) {
+      return false;
+    }
+    // 2) 尝试实际打开 ZIP（截断/损坏会抛异常）
+    const zip = new AdmZip(filePath);
+    const entries = zip.getEntries();
+    return entries.length > 0;
   } catch {
     return false;
   }
