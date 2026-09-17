@@ -2,6 +2,19 @@
 
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本（SemVer）。
 
+## [1.0.6] - 2026-09-17
+
+### 修复
+
+- **P0**：v1.0.5 的 `isValidJar` 仅检查 ZIP 魔数（`PK\x03\x04`），截断/损坏的 jar 会误判为有效
+  - 根因：用户手动放置的 jar（3.9MB）虽有正确魔数但缺少 ZIP 中央目录（END header），是截断下载；v1.0.5 会接受该文件，导致 `java -jar` 反复失败后降级
+  - 修复：`isValidJar` 改用 adm-zip 实际打开 ZIP 并读取条目列表，截断/损坏文件会抛异常被正确拒绝
+  - 效果：损坏 jar 不再被误用，程序立即降级到纯 JS 二进制 XML 解析器，右上角状态清晰
+
+### 改进
+
+- `isValidJar` 双阶校验：先检查 PK 魔数（快速失败），再用 adm-zip 验证 ZIP 完整性（捕获截断）
+
 ## [1.0.5] - 2026-09-17
 
 ### 修复
