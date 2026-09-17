@@ -126,7 +126,7 @@ export default function SummaryPanel({ report, onTabClick }: Props) {
 
       {report.usedFallbackExtractor && (
         <Typography variant="caption" color="warning" sx={{ display: 'block', mt: 1, px: 1 }}>
-          ⚠️ zip 降级模式：smali 对比不可用，仅展示资源与 Manifest 差异
+          ⚠️ zip 降级模式：{report.fallbackReason || 'apktool/Java 不可用'} — smali 对比不可用，XML 文件（含 AndroidManifest.xml）无法显示 diff 内容
         </Typography>
       )}
     </Box>
