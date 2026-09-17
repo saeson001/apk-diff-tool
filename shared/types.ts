@@ -146,7 +146,10 @@ export const IPC = {
   GET_CLASS_DIFF: 'apk-diff:get-class-diff',
   GET_RESOURCE_DIFF: 'apk-diff:get-resource-diff',
   GET_APKTOOL_INFO: 'apk-diff:get-apktool-info',
-  ON_PROGRESS: 'apk-diff:on-progress'
+  ON_PROGRESS: 'apk-diff:on-progress',
+  GET_DEBUG_INFO: 'apk-diff:get-debug-info',
+  OPEN_LOG_DIR: 'apk-diff:open-log-dir',
+  EXPORT_LOG: 'apk-diff:export-log'
 } as const;
 
 export interface ApkDiffApi {
@@ -156,4 +159,7 @@ export interface ApkDiffApi {
   getResourceDiff: (reportId: string, resourcePath: string) => Promise<string>;
   getApktoolInfo: () => Promise<{ version: string | null; installed: boolean; javaVersion: string | null }>;
   onProgress: (callback: (p: DecompProgress) => void) => () => void;
+  getDebugInfo: () => Promise<Record<string, unknown>>;
+  openLogDir: () => Promise<void>;
+  exportLog: () => Promise<string | null>;
 }
