@@ -2,6 +2,29 @@
 
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本（SemVer）。
 
+## [1.0.5] - 2026-09-17
+
+### 修复
+
+- **P0**：手动放置的 apktool.jar 不被识别，右上角仍显示"待安装"
+  - 根因 1：`APKTOOL_MIN_SIZE` 阈值 5MB 过高，用户手动下载的 3.9MB jar 被拒绝
+  - 根因 2：`getApktoolJarPath` 只检查 `%APPDATA%` 目录，不检查软件安装目录
+  - 根因 3：无 ZIP 签名校验，损坏/截断的 jar 也被接受
+  - 修复：
+    - `APKTOOL_MIN_SIZE` 从 5MB 降至 1MB
+    - 新增 `isValidJar()` 校验 ZIP 签名（`PK\x03\x04`）
+    - `getApktoolJarPath` 搜索 3 个位置：`%APPDATA%/tools/`、软件目录`/tools/`、软件目录根目录
+    - 下载完成后也校验 ZIP 签名，损坏文件自动清理重试
+
+- **P0**：v1.0.4 的纯 JS 二进制 XML 解析器 UTF-8 解码错误
+  - 根因：`parseStringPool` 的 UTF-8 分支用 `String.fromCharCode(buf[pos++])` 逐字节解码，多字节 UTF-8 字符（如中文）会乱码
+  - 修复：改用 `buf.toString('utf8', pos, pos + byteCount)` 正确解码
+
+### 改进
+
+- apktool.jar 检测逻辑更健壮：先搜索已存在的 jar（含签名校验），再尝试下载
+- 损坏的 jar 文件自动清理后重新下载，不会反复使用无效文件
+
 ## [1.0.4] - 2026-09-17
 
 ### 修复
