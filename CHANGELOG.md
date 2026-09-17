@@ -2,6 +2,26 @@
 
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本（SemVer）。
 
+## [1.0.4] - 2026-09-17
+
+### 修复
+
+- **P0**：apktool.jar 下载失败时，XML 文件完全无法显示 diff 内容
+  - 根因：apktool.jar 从 GitHub 下载，但 GitHub 及所有镜像在国内环境下全部不可达，导致降级走 adm-zip → 原始二进制 XML → `isProbablyBinary` 判定为二进制 → 只显示哈希+大小
+  - 修复：**新增纯 JS Android 二进制 XML (AXML) 解析器**，不依赖 apktool/Java
+    - 新增 `electron/binaryXmlParser.ts`：解析 Android 二进制 XML 格式（字符串池 + 资源映射 + Start Tag chunks）
+    - 降级模式下自动检测 AndroidManifest.xml 是否为二进制 XML，若是则用纯 JS 解析器提取权限/元数据/组件
+    - Manifest tab 可正常显示权限 diff、元数据 diff、组件 diff
+    - Resources tab 点击 AndroidManifest.xml 可显示文本化后的结构化 diff（而非哈希+大小）
+    - `isProbablyBinary` 对可解析的二进制 XML 返回 false，标记为文本
+
+### 新增
+
+- `binaryXmlParser.ts`：完整的 Android 二进制 XML 解析器
+  - 支持 UTF-8 和 UTF-16LE 字符串池
+  - 提取 manifest 属性、uses-sdk、uses-permission、activity/service/receiver/provider、meta-data
+  - 自动检测文本/二进制格式，文本 XML 仍走 xmldoc 解析
+
 ## [1.0.3] - 2026-09-17
 
 ### 修复
