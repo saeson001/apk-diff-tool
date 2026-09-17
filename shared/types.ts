@@ -110,6 +110,8 @@ export interface DiffReport {
   decompiledAt: number;
   apktoolVersion: string | null;
   usedFallbackExtractor: boolean;
+  /** 降级模式下的具体原因（如 apktool 下载失败、Java 缺失等），供 UI 提示用户 */
+  fallbackReason?: string;
   permissions: PermissionRow[];
   manifest: ManifestDiffResult;
   classes: ClassDiffEntry[];
