@@ -444,8 +444,9 @@ export async function buildDiffReport(params: {
   modifiedDir: string;
   apktoolVersion: string | null;
   usedFallback: boolean;
+  fallbackReason?: string;
 }): Promise<DiffReport> {
-  const { sessionId, originalApk, modifiedApk, originalDir, modifiedDir, apktoolVersion, usedFallback } = params;
+  const { sessionId, originalApk, modifiedApk, originalDir, modifiedDir, apktoolVersion, usedFallback, fallbackReason } = params;
 
   // Manifest
   const oManifest = parseManifest(originalDir);
@@ -532,6 +533,7 @@ export async function buildDiffReport(params: {
     decompiledAt: Date.now(),
     apktoolVersion,
     usedFallbackExtractor: usedFallback,
+    fallbackReason,
     permissions,
     manifest: manifestDiff,
     classes,
