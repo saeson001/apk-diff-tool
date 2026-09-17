@@ -1,8 +1,23 @@
 import { app, BrowserWindow, Menu, dialog, shell, ipcMain } from 'electron';
+import * as fs from 'fs';
 import * as path from 'path';
 import { IPC } from '../shared/types';
 import { ensureApktool, getApktoolJarPath, getApktoolVersion } from './apk-worker';
 import { registerIpcHandlers } from './ipc-handlers';
+
+/** 动态读取 package.json 的 version 字段，避免硬编码导致版本号过期 */
+function getAppVersion(): string {
+  try {
+    // 打包后 package.json 在 app.asar 同目录
+    const pkgPath = app.isPackaged
+      ? path.join(path.dirname(app.getAppPath()), 'package.json')
+      : path.join(app.getAppPath(), 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return pkg.version || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 const isDev = !app.isPackaged || process.env.NODE_ENV === 'development';
 
@@ -97,10 +112,11 @@ function setupMenu(): void {
           label: '关于 APK Diff Tool',
           click: async () => {
             const version = await getApktoolVersion().catch(() => null);
+            const appVersion = getAppVersion();
             dialog.showMessageBox({
               title: '关于 APK Diff Tool',
               message: 'APK Diff Tool',
-              detail: `版本 1.0.0\napktool ${version || '未安装'}`,
+              detail: `版本 ${appVersion}\napktool ${version || '未安装'}`,
               buttons: ['确定']
             });
           }
