@@ -16,6 +16,7 @@ import { spawn, spawnSync } from 'child_process';
 import * as https from 'https';
 import AdmZip from 'adm-zip';
 import type { DecompProgress } from '../shared/types';
+import { logger } from './logger';
 
 const APKTOOL_VERSION = '2.9.3';
 const APKTOOL_JAR_FILENAME = `apktool_${APKTOOL_VERSION}.jar`;
@@ -32,20 +33,26 @@ const APKTOOL_DOWNLOAD_URLS = [
   `https://github.moeyy.xyz/${APKTOOL_RELEASE_URL}`,
 ];
 // apktool.jar 正常大小约 25MB，低于此阈值视为下载不完整/损坏
-const APKTOOL_MIN_SIZE = 1_000_000; // 1MB 下限（apktool.jar 正常约 25MB，低于 1MB 视为损坏/不完整）
+const APKTOOL_MIN_SIZE = 1_000_000; // 1MB 下限
 
-interface ApkooleState {
+interface ApktoolState {
   jarPath: string | null;
   javaCmd: string | null;
   javaVersion: string | null;
   portableJdkDir: string | null;
+  /** 诊断数据：搜索过的 jar 路径及结果 */
+  jarSearchLog: Array<{ path: string; exists: boolean; size: number; valid: boolean; error?: string }>;
+  /** 诊断数据：Java 检测候选 */
+  javaSearchLog: Array<{ candidate: string; found: boolean; version?: string }>;
 }
 
-const state: ApkooleState = {
+const state: ApktoolState = {
   jarPath: null,
   javaCmd: null,
   javaVersion: null,
-  portableJdkDir: null
+  portableJdkDir: null,
+  jarSearchLog: [],
+  javaSearchLog: []
 };
 
 // -------------------------------------------------------------------------
@@ -62,7 +69,6 @@ function toolsDir(): string {
  * 验证 jar 文件是否为有效的 ZIP（apktool.jar 实际是 ZIP 格式）
  * 1) 检查 PK\x03\x04 魔数
  * 2) 尝试用 adm-zip 打开并读取条目列表（可捕获截断/损坏的 ZIP）
- * 截断的下载（如只有 PK 头但缺少中央目录）会在此步被正确拒绝。
  */
 function isValidJar(filePath: string): boolean {
   try {
@@ -72,31 +78,59 @@ function isValidJar(filePath: string): boolean {
     fs.readSync(fd, buf, 0, 4, 0);
     fs.closeSync(fd);
     if (!(buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04)) {
+      logger.debug(`isValidJar: magic bytes fail at ${filePath}`, buf.toString('hex'));
       return false;
     }
     // 2) 尝试实际打开 ZIP（截断/损坏会抛异常）
     const zip = new AdmZip(filePath);
     const entries = zip.getEntries();
-    return entries.length > 0;
-  } catch {
+    if (entries.length === 0) {
+      logger.debug(`isValidJar: ZIP has 0 entries at ${filePath}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    logger.debug(`isValidJar: exception at ${filePath}`, err instanceof Error ? err.message : String(err));
     return false;
   }
 }
 
 /** 搜索 apktool.jar，检查多个可能位置 */
 export function getApktoolJarPath(): string | null {
+  const exeDir = path.dirname(app.getPath('exe'));
   const candidates = [
-    path.join(toolsDir(), APKTOOL_JAR_FILENAME),
-    // 软件安装目录的 tools 子目录（便携版场景）
-    path.join(path.dirname(app.getPath('exe')), 'tools', APKTOOL_JAR_FILENAME),
-    // 软件安装目录根目录
-    path.join(path.dirname(app.getPath('exe')), APKTOOL_JAR_FILENAME),
+    { label: 'userData/tools', path: path.join(toolsDir(), APKTOOL_JAR_FILENAME) },
+    { label: 'exeDir/tools', path: path.join(exeDir, 'tools', APKTOOL_JAR_FILENAME) },
+    { label: 'exeDir', path: path.join(exeDir, APKTOOL_JAR_FILENAME) },
   ];
-  for (const p of candidates) {
-    if (fs.existsSync(p) && fs.statSync(p).size >= APKTOOL_MIN_SIZE && isValidJar(p)) {
+  state.jarSearchLog = [];
+
+  logger.info(`getApktoolJarPath: exeDir=${exeDir}`);
+  logger.info(`getApktoolJarPath: toolsDir=${toolsDir()}`);
+  logger.info(`getApktoolJarPath: isPackaged=${app.isPackaged}`);
+
+  for (const { label, path: p } of candidates) {
+    const exists = fs.existsSync(p);
+    let size = 0;
+    let valid = false;
+    let error: string | undefined;
+    if (exists) {
+      size = fs.statSync(p).size;
+      if (size < APKTOOL_MIN_SIZE) {
+        error = `size ${size} < min ${APKTOOL_MIN_SIZE}`;
+      } else {
+        valid = isValidJar(p);
+        if (!valid) error = 'ZIP invalid';
+      }
+    }
+    state.jarSearchLog.push({ path: p, exists, size, valid, error });
+    logger.info(`jar check [${label}]: ${p} exists=${exists} size=${exists ? size : '-'} valid=${valid} error=${error || '-'}`);
+    if (valid) {
+      logger.info(`jar FOUND: ${p}`);
       return p;
     }
   }
+  logger.warn('jar NOT found in any location');
   return null;
 }
 
@@ -123,6 +157,8 @@ function findSystemJava(): { cmd: string; version: string } | null {
     candidates.push(path.join(programFiles, 'AdoptOpenJDK', 'jdk-17', 'bin', 'java.exe'));
   }
 
+  state.javaSearchLog = [];
+
   for (const candidate of candidates) {
     try {
       const result = spawnSync(candidate, ['-version'], {
@@ -134,12 +170,20 @@ function findSystemJava(): { cmd: string; version: string } | null {
       const versionLine = (result.stderr || result.stdout || '').split('\n').find((l) => l.includes('"'));
       if (versionLine) {
         const match = versionLine.match(/"([^"]+)"/);
-        if (match) return { cmd: candidate, version: match[1] };
+        if (match) {
+          state.javaSearchLog.push({ candidate, found: true, version: match[1] });
+          logger.info(`Java found: ${candidate} version=${match[1]}`);
+          return { cmd: candidate, version: match[1] };
+        }
       }
-    } catch (_err) {
-      // 忽略，尝试下一个候选
+      state.javaSearchLog.push({ candidate, found: false });
+      logger.debug(`Java check: ${candidate} not found or no version output`);
+    } catch (err) {
+      state.javaSearchLog.push({ candidate, found: false });
+      logger.debug(`Java check: ${candidate} error`, err instanceof Error ? err.message : String(err));
     }
   }
+  logger.warn('No system Java found');
   return null;
 }
 
@@ -152,7 +196,6 @@ function downloadFile(url: string, destPath: string, onProgress?: (pct: number) 
     const request = https.get(url, (response) => {
       const location = response.headers.location;
       if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && location) {
-        // 跟随跳转
         file.end();
         file.on('close', () => {
           try { fs.unlinkSync(tmpPath); } catch { /* noop */ }
@@ -177,10 +220,8 @@ function downloadFile(url: string, destPath: string, onProgress?: (pct: number) 
       });
       response.pipe(file);
       file.on('finish', () => {
-        // 先结束写入流，等 close 事件后再 rename，避免 Windows EPERM
         file.end(() => {
           try {
-            // 如果目标文件已存在（上次残留），先删除
             if (fs.existsSync(destPath)) {
               fs.unlinkSync(destPath);
             }
@@ -219,7 +260,10 @@ async function ensurePortableJdk(onProgress?: (pct: number) => void): Promise<{ 
       const versionLine = (result.stderr || '').split('\n').find((l) => l.includes('"'));
       if (versionLine) {
         const match = versionLine.match(/"([^"]+)"/);
-        if (match) return { cmd: jdkCmd, version: match[1] };
+        if (match) {
+          logger.info(`Portable JDK found: ${jdkCmd} version=${match[1]}`);
+          return { cmd: jdkCmd, version: match[1] };
+        }
       }
     } catch { /* fall through */ }
   }
@@ -234,22 +278,19 @@ async function ensurePortableJdk(onProgress?: (pct: number) => void): Promise<{ 
 
   for (const { url, ext } of urls) {
     try {
+      logger.info(`Downloading portable JDK: ${url}`);
       const archivePath = path.join(toolsDir(), `zulu-17.${ext}`);
       onProgress?.(10);
       await downloadFile(url, archivePath, (pct) => onProgress?.(10 + Math.round(pct * 0.7)));
       onProgress?.(85);
 
       fs.mkdirSync(jdkDir, { recursive: true });
-      // 解压到 jdkDir
-      if (ext === 'zip' || ext === 'tgz') {
-        // 用系统 tar/unzip
-        if (ext === 'tgz') {
-          spawnSync('tar', ['-xzf', archivePath, '-C', jdkDir], { timeout: 120000 });
-        } else {
-          spawnSync('tar', ['-xf', archivePath, '-C', jdkDir], { timeout: 120000 });
-        }
-        try { fs.unlinkSync(archivePath); } catch { /* noop */ }
+      if (ext === 'tgz') {
+        spawnSync('tar', ['-xzf', archivePath, '-C', jdkDir], { timeout: 120000 });
+      } else {
+        spawnSync('tar', ['-xf', archivePath, '-C', jdkDir], { timeout: 120000 });
       }
+      try { fs.unlinkSync(archivePath); } catch { /* noop */ }
       onProgress?.(95);
 
       if (fs.existsSync(jdkCmd)) {
@@ -257,31 +298,39 @@ async function ensurePortableJdk(onProgress?: (pct: number) => void): Promise<{ 
         const versionLine = (result.stderr || '').split('\n').find((l) => l.includes('"'));
         if (versionLine) {
           const match = versionLine.match(/"([^"]+)"/);
-          if (match) return { cmd: jdkCmd, version: match[1] };
+          if (match) {
+            logger.info(`Portable JDK downloaded: ${jdkCmd} version=${match[1]}`);
+            return { cmd: jdkCmd, version: match[1] };
+          }
         }
       }
     } catch (err) {
-      console.warn('[apk-worker] portable JDK download failed:', err);
+      logger.warn(`Portable JDK download failed: ${url}`, err instanceof Error ? err.message : String(err));
     }
   }
   return null;
 }
 
 async function ensureJava(onProgress?: (pct: number) => void): Promise<{ cmd: string; version: string } | null> {
+  logger.info('=== Java detection start ===');
   const systemJava = findSystemJava();
   if (systemJava) {
     state.javaCmd = systemJava.cmd;
     state.javaVersion = systemJava.version;
+    logger.info(`Java resolved: ${systemJava.cmd} v${systemJava.version}`);
     return systemJava;
   }
   // 尝试下载便携 JDK
+  logger.info('System Java not found, trying portable JDK download...');
   const portable = await ensurePortableJdk(onProgress);
   if (portable) {
     state.javaCmd = portable.cmd;
     state.javaVersion = portable.version;
     state.portableJdkDir = path.dirname(path.dirname(portable.cmd));
+    logger.info(`Java resolved (portable): ${portable.cmd} v${portable.version}`);
     return portable;
   }
+  logger.warn('No Java available (system + portable both failed)');
   return null;
 }
 
@@ -290,15 +339,16 @@ async function ensureJava(onProgress?: (pct: number) => void): Promise<{ cmd: st
 // -------------------------------------------------------------------------
 
 async function ensureApktoolJar(onProgress?: (pct: number) => void): Promise<string | null> {
+  logger.info('=== apktool jar detection start ===');
   // 先检查多个位置是否已有有效 jar（含 ZIP 签名校验）
   const existing = getApktoolJarPath();
   if (existing) {
     state.jarPath = existing;
+    logger.info(`apktool jar detected: ${existing}`);
     return existing;
   }
   // 没有有效 jar，下载到标准位置
   const jarPath = path.join(toolsDir(), APKTOOL_JAR_FILENAME);
-  // 清理上次下载失败的残留
   if (fs.existsSync(jarPath)) {
     try { fs.unlinkSync(jarPath); } catch { /* noop */ }
   }
@@ -307,38 +357,39 @@ async function ensureApktoolJar(onProgress?: (pct: number) => void): Promise<str
     for (let i = 0; i < APKTOOL_DOWNLOAD_URLS.length; i++) {
       const url = APKTOOL_DOWNLOAD_URLS[i];
       try {
-        console.log(`[apk-worker] downloading apktool from source ${i + 1}/${APKTOOL_DOWNLOAD_URLS.length} (attempt ${attempt + 1}): ${url}`);
+        logger.info(`Downloading apktool from source ${i + 1}/${APKTOOL_DOWNLOAD_URLS.length} (attempt ${attempt + 1}): ${url}`);
         onProgress?.(5 + Math.round((i / APKTOOL_DOWNLOAD_URLS.length) * 40));
         await downloadFile(url, jarPath, onProgress);
-        // 验证下载完整性
         if (fs.existsSync(jarPath) && fs.statSync(jarPath).size >= APKTOOL_MIN_SIZE && isValidJar(jarPath)) {
-          console.log(`[apk-worker] apktool jar downloaded OK, size=${fs.statSync(jarPath).size}`);
+          logger.info(`apktool jar downloaded OK, size=${fs.statSync(jarPath).size}`);
           state.jarPath = jarPath;
           return jarPath;
         }
-        // 大小不足或签名无效，清理并尝试下一个源
-        console.warn(`[apk-worker] downloaded file invalid, trying next source`);
+        logger.warn('Downloaded file invalid, trying next source');
         try { if (fs.existsSync(jarPath)) fs.unlinkSync(jarPath); } catch { /* noop */ }
       } catch (err) {
-        console.warn(`[apk-worker] apktool download failed from source ${i + 1}:`, err);
+        logger.warn(`apktool download failed from source ${i + 1}: ${url}`, err instanceof Error ? err.message : String(err));
         try { if (fs.existsSync(jarPath)) fs.unlinkSync(jarPath); } catch { /* noop */ }
       }
     }
   }
-  console.error('[apk-worker] all apktool download sources failed');
+  logger.error('All apktool download sources failed');
   return null;
 }
 
 export async function getApktoolVersion(): Promise<string | null> {
   if (!state.jarPath || !state.javaCmd) return null;
   try {
+    logger.info(`getApktoolVersion: running "${state.javaCmd} -jar ${state.jarPath} --version"`);
     const result = spawnSync(state.javaCmd, ['-jar', state.jarPath, '--version'], {
       timeout: 10000,
       encoding: 'utf8'
     });
     const text = (result.stdout || result.stderr || '').trim();
+    logger.info(`getApktoolVersion result: ${text}`);
     return text || APKTOOL_VERSION;
-  } catch {
+  } catch (err) {
+    logger.error('getApktoolVersion failed', err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -353,6 +404,7 @@ export async function ensureApktool(onProgress?: (pct: number) => void): Promise
   javaVersion: string | null;
   javaCmd: string | null;
 }> {
+  logger.info('=== ensureApktool start ===');
   const javaInfo = await ensureJava(onProgress);
   if (javaInfo) {
     state.javaCmd = javaInfo.cmd;
@@ -360,7 +412,28 @@ export async function ensureApktool(onProgress?: (pct: number) => void): Promise
   }
   const jarPath = await ensureApktoolJar(onProgress);
   const version = javaInfo && jarPath ? await getApktoolVersion() : null;
+  logger.info(`=== ensureApktool done: version=${version} jarPath=${jarPath} javaVersion=${state.javaVersion} ===`);
   return { version, jarPath, javaVersion: state.javaVersion, javaCmd: state.javaCmd };
+}
+
+/** 收集诊断信息（供 DebugPanel 使用） */
+export function getDebugData(): Record<string, unknown> {
+  const exeDir = path.dirname(app.getPath('exe'));
+  return {
+    exeDir,
+    exePath: app.getPath('exe'),
+    userData: app.getPath('userData'),
+    toolsDir: toolsDir(),
+    isPackaged: app.isPackaged,
+    appPath: app.getAppPath(),
+    jarPath: state.jarPath,
+    javaCmd: state.javaCmd,
+    javaVersion: state.javaVersion,
+    jarSearchLog: state.jarSearchLog,
+    javaSearchLog: state.javaSearchLog,
+    apktoolMinSize: APKTOOL_MIN_SIZE,
+    apktoolJarFilename: APKTOOL_JAR_FILENAME,
+  };
 }
 
 // -------------------------------------------------------------------------
@@ -383,20 +456,22 @@ export async function decompileApk(
     `${Date.now()}-${path.basename(apkPath, '.apk')}`
   );
   fs.mkdirSync(outDir, { recursive: true });
+  logger.info(`decompileApk: ${apkPath} -> ${outDir}`);
 
   const ready = await ensureApktool((pct) => {
     onProgress({ phase: 'preparing', label: '准备 apktool/Java', progress: pct });
   });
 
   if (ready.jarPath && ready.javaVersion) {
+    logger.info(`Using apktool: ${ready.javaCmd} -jar ${ready.jarPath}`);
     try {
       return await runApktool(apkPath, ready.javaCmd!, ready.jarPath, outDir, onProgress);
     } catch (err) {
-      console.warn('[apk-worker] apktool failed, falling back to zip extraction:', err);
+      logger.warn('apktool failed, falling back to zip extraction:', err instanceof Error ? err.message : String(err));
     }
   }
 
-  // 降级：仅解压 zip
+  logger.info('Using zip fallback');
   return runZipFallback(apkPath, outDir, onProgress, ready);
 }
 
@@ -407,6 +482,7 @@ async function runApktool(
   outDir: string,
   onProgress: (p: DecompProgress) => void
 ): Promise<DecompileResult> {
+  logger.info(`runApktool: ${javaCmd} -jar ${jarPath} d -f -o ${outDir} ${apkPath}`);
   onProgress({ phase: 'extracting', label: 'apktool 反编译中…', progress: 10 });
   await new Promise<void>((resolve, reject) => {
     const args = ['-jar', jarPath, 'd', '-f', '-o', outDir, apkPath];
@@ -420,7 +496,6 @@ async function runApktool(
     let stderrBuf = '';
     child.stdout.on('data', (chunk) => {
       const s = chunk.toString();
-      // apktool 会输出 "I: Copying raw resources..." / "I: Loading resource table..."
       if (/Loading resource table/i.test(s)) progress = 30;
       if (/Copying raw resources/i.test(s)) progress = 50;
       if (/Decoding file-resources/i.test(s)) progress = 70;
@@ -433,12 +508,18 @@ async function runApktool(
 
     child.on('error', (err) => {
       clearInterval(interval);
+      logger.error(`apktool spawn error: ${err.message}`);
       reject(err);
     });
     child.on('close', (code) => {
       clearInterval(interval);
-      if (code === 0) resolve();
-      else reject(new Error(`apktool exit ${code}: ${stderrBuf.slice(0, 500)}`));
+      if (code === 0) {
+        logger.info('apktool completed successfully');
+        resolve();
+      } else {
+        logger.error(`apktool exit ${code}: ${stderrBuf.slice(0, 500)}`);
+        reject(new Error(`apktool exit ${code}: ${stderrBuf.slice(0, 500)}`));
+      }
     });
   });
   onProgress({ phase: 'smali', label: 'smali 已就绪', progress: 95 });
@@ -451,6 +532,7 @@ function runZipFallback(
   onProgress: (p: DecompProgress) => void,
   ready: { version: string | null; jarPath: string | null; javaVersion: string | null }
 ): DecompileResult {
+  logger.info('runZipFallback: extracting APK as zip');
   onProgress({ phase: 'extracting', label: '降级：直接解压 APK（无 Java/apktool）', progress: 40 });
   const fallbackReason = !ready.javaVersion
     ? '系统未找到 Java 且便携 JDK 下载失败，无法反编译 smali'
@@ -459,7 +541,9 @@ function runZipFallback(
     const zip = new AdmZip(apkPath);
     zip.extractAllTo(outDir, true);
     onProgress({ phase: 'comparing', label: 'zip 降级模式', progress: 100, detail: fallbackReason });
+    logger.info('Zip fallback extraction completed');
   } catch (err) {
+    logger.error('Zip fallback extraction failed', err instanceof Error ? err.message : String(err));
     onProgress({ phase: 'error', label: '解压失败', progress: 100, detail: String(err) });
   }
   return { outDir, usedFallback: true, fallbackReason };
