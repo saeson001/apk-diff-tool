@@ -2,13 +2,13 @@ import { app, BrowserWindow, Menu, dialog, shell, ipcMain } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { IPC } from '../shared/types';
-import { ensureApktool, getApktoolJarPath, getApktoolVersion } from './apk-worker';
+import { ensureApktool, getApktoolJarPath, getApktoolVersion, getDebugData } from './apk-worker';
 import { registerIpcHandlers } from './ipc-handlers';
+import { logger } from './logger';
 
 /** 动态读取 package.json 的 version 字段，避免硬编码导致版本号过期 */
 function getAppVersion(): string {
   try {
-    // 打包后 package.json 在 app.asar 同目录
     const pkgPath = app.isPackaged
       ? path.join(path.dirname(app.getAppPath()), 'package.json')
       : path.join(app.getAppPath(), 'package.json');
@@ -106,6 +106,47 @@ function setupMenu(): void {
       ]
     },
     {
+      label: '工具',
+      submenu: [
+        {
+          label: '诊断信息',
+          click: () => {
+            const win = BrowserWindow.getAllWindows()[0];
+            if (win) win.webContents.send('apk-diff:show-debug');
+          }
+        },
+        {
+          label: '打开日志目录',
+          click: () => {
+            shell.openPath(logger.getLogDir());
+          }
+        },
+        {
+          label: '导出日志…',
+          click: async () => {
+            const win = BrowserWindow.getAllWindows()[0];
+            if (!win) return;
+            const result = await dialog.showSaveDialog(win, {
+              defaultPath: `apk-diff-tool-log-${new Date().toISOString().slice(0, 10)}.txt`,
+              filters: [{ name: 'Text files', extensions: ['txt'] }]
+            });
+            if (!result.canceled && result.filePath) {
+              try {
+                logger.flush();
+                const src = logger.getLogFile();
+                if (fs.existsSync(src)) {
+                  fs.copyFileSync(src, result.filePath);
+                  logger.info(`Log exported to ${result.filePath}`);
+                }
+              } catch (err) {
+                logger.error('Log export failed', err instanceof Error ? err.message : String(err));
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
       label: '关于',
       submenu: [
         {
@@ -116,7 +157,7 @@ function setupMenu(): void {
             dialog.showMessageBox({
               title: '关于 APK Diff Tool',
               message: 'APK Diff Tool',
-              detail: `版本 ${appVersion}\napktool ${version || '未安装'}`,
+              detail: `版本 ${appVersion}\napktool ${version || '未安装'}\n\n日志文件: ${logger.getLogFile()}`,
               buttons: ['确定']
             });
           }
@@ -129,7 +170,10 @@ function setupMenu(): void {
 }
 
 async function main(): Promise<void> {
-  // Ensure single-instance: prevent a second copy from clobbering userData.
+  logger.info(`APK Diff Tool starting, version=${getAppVersion()}, packaged=${app.isPackaged}`);
+  logger.info(`exePath=${app.getPath('exe')}`);
+  logger.info(`userData=${app.getPath('userData')}`);
+
   if (!app.requestSingleInstanceLock()) {
     app.quit();
     return;
@@ -145,6 +189,8 @@ async function main(): Promise<void> {
   app.whenReady().then(async () => {
     setupMenu();
     registerIpcHandlers(ipcMain);
+
+    // apktool 状态
     ipcMain.handle(IPC.GET_APKTOOL_INFO, async () => {
       const info = await ensureApktool();
       return {
@@ -153,10 +199,55 @@ async function main(): Promise<void> {
         javaVersion: info.javaVersion
       };
     });
+
+    // 诊断信息
+    ipcMain.handle(IPC.GET_DEBUG_INFO, async () => {
+      const data = getDebugData();
+      const loggerInfo = logger.collectDebugInfo({
+        jarSearchLog: data.jarSearchLog,
+        javaSearchLog: data.javaSearchLog,
+        jarPath: data.jarPath,
+        javaCmd: data.javaCmd,
+        javaVersion: data.javaVersion,
+        toolsDir: data.toolsDir,
+        apktoolMinSize: data.apktoolMinSize,
+        apktoolJarFilename: data.apktoolJarFilename,
+      });
+      return loggerInfo;
+    });
+
+    // 打开日志目录
+    ipcMain.handle(IPC.OPEN_LOG_DIR, async () => {
+      shell.openPath(logger.getLogDir());
+    });
+
+    // 导出日志
+    ipcMain.handle(IPC.EXPORT_LOG, async (event) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win) return null;
+      const result = await dialog.showSaveDialog(win, {
+        defaultPath: `apk-diff-tool-log-${new Date().toISOString().slice(0, 10)}.txt`,
+        filters: [{ name: 'Text files', extensions: ['txt'] }]
+      });
+      if (result.canceled || !result.filePath) return null;
+      try {
+        logger.flush();
+        const src = logger.getLogFile();
+        if (fs.existsSync(src)) {
+          fs.copyFileSync(src, result.filePath);
+          logger.info(`Log exported to ${result.filePath}`);
+          return result.filePath;
+        }
+      } catch (err) {
+        logger.error('Log export failed', err instanceof Error ? err.message : String(err));
+      }
+      return null;
+    });
+
     createMainWindow();
     // Warm up: pre-check Java/apktool so the first user action is snappy.
     void ensureApktool().catch((err) => {
-      console.warn('[main] apktool warm-up failed:', err);
+      logger.warn('[main] apktool warm-up failed:', err instanceof Error ? err.message : String(err));
     });
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
@@ -164,6 +255,8 @@ async function main(): Promise<void> {
   });
 
   app.on('window-all-closed', () => {
+    logger.info('All windows closed, flushing log');
+    logger.flush();
     if (process.platform !== 'darwin') app.quit();
   });
 }
