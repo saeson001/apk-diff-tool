@@ -32,7 +32,7 @@ const APKTOOL_DOWNLOAD_URLS = [
   `https://github.moeyy.xyz/${APKTOOL_RELEASE_URL}`,
 ];
 // apktool.jar 正常大小约 25MB，低于此阈值视为下载不完整/损坏
-const APKTOOL_MIN_SIZE = 5_000_000;
+const APKTOOL_MIN_SIZE = 1_000_000; // 1MB 下限（apktool.jar 正常约 25MB，低于 1MB 视为损坏/不完整）
 
 interface ApkooleState {
   jarPath: string | null;
@@ -58,8 +58,34 @@ function toolsDir(): string {
   return dir;
 }
 
-export function getApktoolJarPath(): string {
-  return path.join(toolsDir(), `apktool_${APKTOOL_VERSION}.jar`);
+/** 验证 jar 文件是否为有效 ZIP（检查 PK\x03\x04 签名） */
+function isValidJar(filePath: string): boolean {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(4);
+    fs.readSync(fd, buf, 0, 4, 0);
+    fs.closeSync(fd);
+    return buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04;
+  } catch {
+    return false;
+  }
+}
+
+/** 搜索 apktool.jar，检查多个可能位置 */
+export function getApktoolJarPath(): string | null {
+  const candidates = [
+    path.join(toolsDir(), APKTOOL_JAR_FILENAME),
+    // 软件安装目录的 tools 子目录（便携版场景）
+    path.join(path.dirname(app.getPath('exe')), 'tools', APKTOOL_JAR_FILENAME),
+    // 软件安装目录根目录
+    path.join(path.dirname(app.getPath('exe')), APKTOOL_JAR_FILENAME),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p) && fs.statSync(p).size >= APKTOOL_MIN_SIZE && isValidJar(p)) {
+      return p;
+    }
+  }
+  return null;
 }
 
 // -------------------------------------------------------------------------
@@ -252,13 +278,15 @@ async function ensureJava(onProgress?: (pct: number) => void): Promise<{ cmd: st
 // -------------------------------------------------------------------------
 
 async function ensureApktoolJar(onProgress?: (pct: number) => void): Promise<string | null> {
-  const jarPath = getApktoolJarPath();
-  // 已存在且大小合理，直接返回
-  if (fs.existsSync(jarPath) && fs.statSync(jarPath).size >= APKTOOL_MIN_SIZE) {
-    state.jarPath = jarPath;
-    return jarPath;
+  // 先检查多个位置是否已有有效 jar（含 ZIP 签名校验）
+  const existing = getApktoolJarPath();
+  if (existing) {
+    state.jarPath = existing;
+    return existing;
   }
-  // 存在但过小（上次下载失败残留），先清理
+  // 没有有效 jar，下载到标准位置
+  const jarPath = path.join(toolsDir(), APKTOOL_JAR_FILENAME);
+  // 清理上次下载失败的残留
   if (fs.existsSync(jarPath)) {
     try { fs.unlinkSync(jarPath); } catch { /* noop */ }
   }
@@ -271,13 +299,13 @@ async function ensureApktoolJar(onProgress?: (pct: number) => void): Promise<str
         onProgress?.(5 + Math.round((i / APKTOOL_DOWNLOAD_URLS.length) * 40));
         await downloadFile(url, jarPath, onProgress);
         // 验证下载完整性
-        if (fs.existsSync(jarPath) && fs.statSync(jarPath).size >= APKTOOL_MIN_SIZE) {
+        if (fs.existsSync(jarPath) && fs.statSync(jarPath).size >= APKTOOL_MIN_SIZE && isValidJar(jarPath)) {
           console.log(`[apk-worker] apktool jar downloaded OK, size=${fs.statSync(jarPath).size}`);
           state.jarPath = jarPath;
           return jarPath;
         }
-        // 大小不足，清理并尝试下一个源
-        console.warn(`[apk-worker] downloaded file too small, trying next source`);
+        // 大小不足或签名无效，清理并尝试下一个源
+        console.warn(`[apk-worker] downloaded file invalid, trying next source`);
         try { if (fs.existsSync(jarPath)) fs.unlinkSync(jarPath); } catch { /* noop */ }
       } catch (err) {
         console.warn(`[apk-worker] apktool download failed from source ${i + 1}:`, err);
