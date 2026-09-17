@@ -105,11 +105,18 @@ function parseStringPool(buf: Buffer, offset: number, chunkSize: number): String
       } else {
         charCount = firstByte;
       }
-      // skip byte count (1 or 2 bytes)
-      const byteCountByte = buf[pos++];
-      if (byteCountByte & 0x80) pos++;
-      for (let c = 0; c < charCount; c++) {
-        str += String.fromCharCode(buf[pos++]);
+      // byte count (1 or 2 bytes)
+      let byteCount: number;
+      const byteCountFirst = buf[pos++];
+      if (byteCountFirst & 0x80) {
+        byteCount = ((byteCountFirst & 0x7F) << 8) | buf[pos++];
+      } else {
+        byteCount = byteCountFirst;
+      }
+      // Use Buffer's built-in UTF-8 decoder (handles multi-byte chars correctly)
+      if (byteCount > 0 && pos + byteCount <= buf.length) {
+        str = buf.toString('utf8', pos, pos + byteCount);
+        pos += byteCount;
       }
     } else {
       // UTF-16LE
