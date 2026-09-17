@@ -16,7 +16,10 @@ const api: ApkDiffApi = {
     const listener = (_event: Electron.IpcRendererEvent, payload: DecompProgress) => callback(payload);
     ipcRenderer.on(IPC.ON_PROGRESS, listener);
     return () => ipcRenderer.removeListener(IPC.ON_PROGRESS, listener);
-  }
+  },
+  getDebugInfo: () => ipcRenderer.invoke(IPC.GET_DEBUG_INFO),
+  openLogDir: () => ipcRenderer.invoke(IPC.OPEN_LOG_DIR),
+  exportLog: () => ipcRenderer.invoke(IPC.EXPORT_LOG)
 };
 
 contextBridge.exposeInMainWorld('apkDiff', api);
@@ -29,4 +32,9 @@ ipcRenderer.on('apk-diff:file-selected-original', (_e, p: string) => {
 });
 ipcRenderer.on('apk-diff:file-selected-modified', (_e, p: string) => {
   window.dispatchEvent(new CustomEvent('apk-diff-file-selected', { detail: { kind: 'modified' as const, path: p } satisfies FilePickPayload }));
+});
+
+// 菜单"诊断信息"触发的弹窗
+ipcRenderer.on('apk-diff:show-debug', () => {
+  window.dispatchEvent(new CustomEvent('apk-diff-show-debug'));
 });
