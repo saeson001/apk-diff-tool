@@ -18,11 +18,21 @@ import AdmZip from 'adm-zip';
 import type { DecompProgress } from '../shared/types';
 
 const APKTOOL_VERSION = '2.9.3';
+const APKTOOL_JAR_FILENAME = `apktool_${APKTOOL_VERSION}.jar`;
+const APKTOOL_RELEASE_URL = `https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/${APKTOOL_JAR_FILENAME}`;
 const APKTOOL_DOWNLOAD_URLS = [
-  `https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar`,
-  `https://ghproxy.com/https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar`,
-  `https://mirror.ghproxy.com/https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar`,
+  // 直连
+  APKTOOL_RELEASE_URL,
+  // 国内镜像源（按可用性排序）
+  `https://mirror.ghproxy.com/${APKTOOL_RELEASE_URL}`,
+  `https://ghproxy.com/${APKTOOL_RELEASE_URL}`,
+  `https://ghproxy.net/${APKTOOL_RELEASE_URL}`,
+  `https://gh.llkk.cc/${APKTOOL_RELEASE_URL}`,
+  `https://ghfast.top/${APKTOOL_RELEASE_URL}`,
+  `https://github.moeyy.xyz/${APKTOOL_RELEASE_URL}`,
 ];
+// apktool.jar 正常大小约 25MB，低于此阈值视为下载不完整/损坏
+const APKTOOL_MIN_SIZE = 5_000_000;
 
 interface ApkooleState {
   jarPath: string | null;
@@ -243,23 +253,34 @@ async function ensureJava(onProgress?: (pct: number) => void): Promise<{ cmd: st
 
 async function ensureApktoolJar(onProgress?: (pct: number) => void): Promise<string | null> {
   const jarPath = getApktoolJarPath();
-  if (fs.existsSync(jarPath) && fs.statSync(jarPath).size > 1_000_000) {
+  // 已存在且大小合理，直接返回
+  if (fs.existsSync(jarPath) && fs.statSync(jarPath).size >= APKTOOL_MIN_SIZE) {
     state.jarPath = jarPath;
     return jarPath;
   }
-  // 尝试多个下载源，每个源最多重试 2 次
+  // 存在但过小（上次下载失败残留），先清理
+  if (fs.existsSync(jarPath)) {
+    try { fs.unlinkSync(jarPath); } catch { /* noop */ }
+  }
+  // 逐个源尝试下载，成功即返回；全部失败返回 null
   for (let attempt = 0; attempt < 2; attempt++) {
-    for (const url of APKTOOL_DOWNLOAD_URLS) {
+    for (let i = 0; i < APKTOOL_DOWNLOAD_URLS.length; i++) {
+      const url = APKTOOL_DOWNLOAD_URLS[i];
       try {
-        console.log(`[apk-worker] downloading apktool from ${url} (attempt ${attempt + 1})`);
+        console.log(`[apk-worker] downloading apktool from source ${i + 1}/${APKTOOL_DOWNLOAD_URLS.length} (attempt ${attempt + 1}): ${url}`);
+        onProgress?.(5 + Math.round((i / APKTOOL_DOWNLOAD_URLS.length) * 40));
         await downloadFile(url, jarPath, onProgress);
-        if (fs.existsSync(jarPath) && fs.statSync(jarPath).size > 1_000_000) {
+        // 验证下载完整性
+        if (fs.existsSync(jarPath) && fs.statSync(jarPath).size >= APKTOOL_MIN_SIZE) {
+          console.log(`[apk-worker] apktool jar downloaded OK, size=${fs.statSync(jarPath).size}`);
           state.jarPath = jarPath;
           return jarPath;
         }
+        // 大小不足，清理并尝试下一个源
+        console.warn(`[apk-worker] downloaded file too small, trying next source`);
+        try { if (fs.existsSync(jarPath)) fs.unlinkSync(jarPath); } catch { /* noop */ }
       } catch (err) {
-        console.warn(`[apk-worker] apktool download failed from ${url}:`, err);
-        // 清理不完整的下载
+        console.warn(`[apk-worker] apktool download failed from source ${i + 1}:`, err);
         try { if (fs.existsSync(jarPath)) fs.unlinkSync(jarPath); } catch { /* noop */ }
       }
     }
