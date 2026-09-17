@@ -8,15 +8,16 @@ import {
   Tabs,
   Alert,
   CircularProgress,
-  Snackbar,
-  Alert as MAlert,
+  Tooltip,
+  IconButton,
   Divider
 } from '@mui/material';
 import {
   Android as AndroidIcon,
   CompareArrows as CompareIcon,
   Description as DescriptionIcon,
-  Inventory2 as ResourcesIcon
+  Inventory2 as ResourcesIcon,
+  BugReport as BugReportIcon
 } from '@mui/icons-material';
 import UploadPanel from './components/UploadPanel';
 import SummaryPanel from './components/SummaryPanel';
@@ -24,6 +25,7 @@ import PermissionsView from './components/PermissionsView';
 import ManifestView from './components/ManifestView';
 import SmaliDiffView from './components/SmaliDiffView';
 import ResourcesView from './components/ResourcesView';
+import DebugPanel from './components/DebugPanel';
 import type { DiffReport, DecompProgress } from '../shared/types';
 
 type TabKey = 'permissions' | 'manifest' | 'smali' | 'resources';
@@ -34,13 +36,20 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [apktoolInfo, setApktoolInfo] = useState<{ version: string | null; installed: boolean; javaVersion: string | null } | null>(null);
   const [tab, setTab] = useState<TabKey>('permissions');
+  const [showDebug, setShowDebug] = useState(false);
   const sessionIdRef = useRef<string>('');
 
   useEffect(() => {
     if (!window.apkDiff) return;
     const unsub = window.apkDiff.onProgress(setProgress);
     window.apkDiff.getApktoolInfo().then(setApktoolInfo).catch(() => setApktoolInfo(null));
-    return unsub;
+    // 监听菜单"诊断信息"
+    const onDebug = () => setShowDebug(true);
+    window.addEventListener('apk-diff-show-debug', onDebug);
+    return () => {
+      unsub();
+      window.removeEventListener('apk-diff-show-debug', onDebug);
+    };
   }, []);
 
   const handleStartDiff = useCallback(async (original: string, modified: string) => {
@@ -71,11 +80,16 @@ export default function App() {
           <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 600 }}>
             APK Diff Tool
           </Typography>
-          <Typography variant="body2" color="rgba(255,255,255,0.85)" sx={{ mr: 2 }}>
+          <Typography variant="body2" color="rgba(255,255,255,0.85)" sx={{ mr: 1 }}>
             {apktoolInfo
               ? `apktool ${apktoolInfo.version || '待安装'} · Java ${apktoolInfo.javaVersion || '未检测'}`
               : 'apktool/Java 检测中…'}
           </Typography>
+          <Tooltip title="诊断信息（查看路径、搜索记录、导出日志）">
+            <IconButton color="inherit" size="small" onClick={() => setShowDebug(true)}>
+              <BugReportIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
         </Toolbar>
       </AppBar>
 
@@ -121,6 +135,8 @@ export default function App() {
           </Box>
         )}
       </Box>
+
+      <DebugPanel open={showDebug} onClose={() => setShowDebug(false)} />
     </Box>
   );
 }
