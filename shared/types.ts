@@ -132,6 +132,94 @@ export interface ApkInfo {
   size: number;
 }
 
+// ---------------------------------------------------------------------------
+// AI recommendation types
+// ---------------------------------------------------------------------------
+
+export interface AISettings {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
+export interface ApkMetadata {
+  path: string;
+  name: string;
+  size: number;
+  fileCount: number;
+  /** 前 50 个文件路径，供 AI 分析结构相似度 */
+  samplePaths: string[];
+  hasDex: boolean;
+  hasRes: boolean;
+  hasAssets: boolean;
+  hasLib: boolean;
+}
+
+export interface AIRecommendation {
+  approach: 'full_apktool' | 'hash_only';
+  reasoning: string;
+  confidence: number; // 0.0 - 1.0
+}
+
+// ---------------------------------------------------------------------------
+// Hash-only diff types
+// ---------------------------------------------------------------------------
+
+export type HashFileCategory = 'dex' | 'xml' | 'image' | 'resource' | 'asset' | 'native' | 'other';
+
+export interface HashDiffEntry {
+  path: string;
+  status: 'added' | 'removed' | 'modified' | 'unchanged';
+  originalSize?: number;
+  modifiedSize?: number;
+  category: HashFileCategory;
+}
+
+export interface HashDiffReport {
+  sessionId: string;
+  original: { path: string; name: string; size: number };
+  modified: { path: string; name: string; size: number };
+  entries: HashDiffEntry[];
+  summary: { added: number; removed: number; modified: number; unchanged: number };
+  aiRecommendation?: AIRecommendation;
+  elapsedMs: number;
+}
+
+// ---------------------------------------------------------------------------
+// Hash-mode per-file content diff (on-demand, no decompilation)
+// ---------------------------------------------------------------------------
+
+export interface HashFileDiffResult {
+  path: string;
+  /** text-diff: unified diff available; binary: sizes/hash only; unsupported: needs full decompile; error */
+  kind: 'text-diff' | 'binary' | 'unsupported' | 'error';
+  status: 'added' | 'removed' | 'modified';
+  /** Unified diff text (kind === 'text-diff') */
+  diff?: string;
+  additions?: number;
+  deletions?: number;
+  originalSize?: number;
+  modifiedSize?: number;
+  /** Human-readable explanation for binary/unsupported/error */
+  note?: string;
+  /** e.g. "AXML 已转换为 XML 文本后对比" */
+  transformNote?: string;
+}
+
+// ---------------------------------------------------------------------------
+// AI chat (conversation about the current diff)
+// ---------------------------------------------------------------------------
+
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
+export interface AIChatResult {
+  content: string;
+  elapsedMs: number;
+}
+
 export interface OpenOptions {
   defaultPath?: string;
 }
@@ -140,16 +228,50 @@ export interface OpenOptions {
 // IPC channels & API surface
 // ---------------------------------------------------------------------------
 
+/** 版本检测方法记录 */
+export interface VersionCheckMethod {
+  name: string;
+  source: string;
+  success: boolean;
+  version: string | null;
+  error?: string;
+}
+
+/** 版本检测结果 */
+export interface VersionCheckResult {
+  finalVersion: string;
+  expectedVersion: string;
+  success: boolean;
+  isFallback: boolean;
+  methods: VersionCheckMethod[];
+  checkedAt: string;
+}
+
 export const IPC = {
   OPEN_APK: 'apk-diff:open-apk',
   START_DIFF: 'apk-diff:start-diff',
   GET_CLASS_DIFF: 'apk-diff:get-class-diff',
   GET_RESOURCE_DIFF: 'apk-diff:get-resource-diff',
   GET_APKTOOL_INFO: 'apk-diff:get-apktool-info',
+  GET_APP_VERSION: 'apk-diff:get-app-version',
+  GET_VERSION_CHECK: 'apk-diff:get-version-check',
+  RECHECK_VERSION: 'apk-diff:recheck-version',
   ON_PROGRESS: 'apk-diff:on-progress',
   GET_DEBUG_INFO: 'apk-diff:get-debug-info',
   OPEN_LOG_DIR: 'apk-diff:open-log-dir',
-  EXPORT_LOG: 'apk-diff:export-log'
+  EXPORT_LOG: 'apk-diff:export-log',
+  GET_JAVA_PATH: 'apk-diff:get-java-path',
+  SET_JAVA_PATH: 'apk-diff:set-java-path',
+  PICK_JAVA_PATH: 'apk-diff:pick-java-path',
+  // AI
+  GET_AI_SETTINGS: 'apk-diff:get-ai-settings',
+  SET_AI_SETTINGS: 'apk-diff:set-ai-settings',
+  GET_APK_METADATA: 'apk-diff:get-apk-metadata',
+  GET_AI_RECOMMENDATION: 'apk-diff:get-ai-recommendation',
+  START_HASH_DIFF: 'apk-diff:start-hash-diff',
+  // Hash-mode per-file content diff + AI chat
+  GET_HASH_FILE_DIFF: 'apk-diff:get-hash-file-diff',
+  AI_CHAT: 'apk-diff:ai-chat'
 } as const;
 
 export interface ApkDiffApi {
@@ -158,8 +280,22 @@ export interface ApkDiffApi {
   getClassDiff: (reportId: string, classPath: string) => Promise<string>;
   getResourceDiff: (reportId: string, resourcePath: string) => Promise<string>;
   getApktoolInfo: () => Promise<{ version: string | null; installed: boolean; javaVersion: string | null }>;
+  getAppVersion: () => Promise<string>;
+  getVersionCheck: () => Promise<VersionCheckResult>;
+  recheckVersion: () => Promise<VersionCheckResult>;
   onProgress: (callback: (p: DecompProgress) => void) => () => void;
   getDebugInfo: () => Promise<Record<string, unknown>>;
   openLogDir: () => Promise<void>;
   exportLog: () => Promise<string | null>;
+  getJavaPath: () => Promise<string | null>;
+  setJavaPath: (path: string | null) => Promise<void>;
+  pickJavaPath: () => Promise<string | null>;
+  // AI
+  getAISettings: () => Promise<AISettings>;
+  setAISettings: (s: AISettings) => Promise<void>;
+  getApkMetadata: (apkPath: string) => Promise<ApkMetadata>;
+  getAIRecommendation: (originalMeta: ApkMetadata, modifiedMeta: ApkMetadata) => Promise<AIRecommendation>;
+  startHashDiff: (original: string, modified: string, recommendation?: AIRecommendation) => Promise<HashDiffReport>;
+  getHashFileDiff: (sessionId: string, filePath: string) => Promise<HashFileDiffResult>;
+  sendAIChat: (messages: ChatMessage[], context: string) => Promise<AIChatResult>;
 }
