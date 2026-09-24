@@ -19,8 +19,11 @@ import { app, dialog, BrowserWindow } from 'electron';
 import type { IpcMain } from 'electron';
 import type { DecompProgress, DiffReport } from '../shared/types';
 import { IPC } from '../shared/types';
-import { ensureApktool, decompileApk } from './apk-worker';
+import { ensureApktool, decompileApk, getAISettings } from './apk-worker';
 import { buildDiffReport, getClassUnifiedDiff, getResourceUnifiedDiff } from './diff-engine';
+import { getHashFileContentDiff } from './hash-diff';
+import { chatWithAI } from './ai-chat';
+import type { ChatMessage } from '../shared/types';
 
 // 保留每个 sessionId 对应的产物目录，供懒加载 IPC 使用
 const sessions = new Map<string, { originalDir: string; modifiedDir: string; report: DiffReport }>();
@@ -103,6 +106,18 @@ export function registerIpcHandlers(ipcMain: IpcMain): void {
     const session = sessions.get(sessionId);
     if (!session) return '';
     return getResourceUnifiedDiff(sessionId, resourcePath, session.originalDir, session.modifiedDir);
+  });
+
+  // hash 模式：单文件内容 diff（按需、不反编译）
+  ipcMain.handle(IPC.GET_HASH_FILE_DIFF, async (_event, sessionId: string, filePath: string) => {
+    return getHashFileContentDiff(sessionId, filePath);
+  });
+
+  // AI 对话：消息历史 + 对比上下文由渲染层传入，系统提示词由主进程注入
+  ipcMain.handle(IPC.AI_CHAT, async (_event, messages: ChatMessage[], context: string) => {
+    const settings = getAISettings();
+    const result = await chatWithAI(settings, messages || [], context || '');
+    return result;
   });
 }
 
