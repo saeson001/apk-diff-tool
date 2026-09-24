@@ -17,16 +17,68 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { app, dialog, BrowserWindow } from 'electron';
 import type { IpcMain } from 'electron';
+import { Worker } from 'worker_threads';
 import type { DecompProgress, DiffReport } from '../shared/types';
 import { IPC } from '../shared/types';
 import { ensureApktool, decompileApk, getAISettings } from './apk-worker';
-import { buildDiffReport, getClassUnifiedDiff, getResourceUnifiedDiff } from './diff-engine';
+import { getClassUnifiedDiff, getResourceUnifiedDiff } from './diff-engine';
 import { getHashFileContentDiff } from './hash-diff';
 import { chatWithAI } from './ai-chat';
 import type { ChatMessage } from '../shared/types';
 
 // 保留每个 sessionId 对应的产物目录，供懒加载 IPC 使用
 const sessions = new Map<string, { originalDir: string; modifiedDir: string; report: DiffReport }>();
+
+const DIFF_WORKER_TIMEOUT_MS = 30 * 60 * 1000; // 与反编译超时一致
+
+/**
+ * 在 worker_threads 中执行 buildDiffReport。
+ * 根因背景：全量对比超大反编译树（数十万文件）会阻塞主进程事件循环数分钟，
+ * 导致窗口"未响应"、心跳/日志停止，被结束进程后表现为闪退（v1.4.1 及之前）。
+ */
+function runDiffWorker(params: {
+  sessionId: string;
+  originalApk: string;
+  modifiedApk: string;
+  originalDir: string;
+  modifiedDir: string;
+  apktoolVersion: string | null;
+  usedFallback: boolean;
+  fallbackReason?: string;
+}): Promise<DiffReport> {
+  return new Promise<DiffReport>((resolve, reject) => {
+    let settled = false;
+    const worker = new Worker(path.join(__dirname, 'diff-worker.js'), { workerData: { params } });
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      fn();
+    };
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        try { worker.terminate(); } catch { /* noop */ }
+      }
+      finish(() => reject(new Error('对比超时（>30 分钟），已终止对比线程。')));
+    }, DIFF_WORKER_TIMEOUT_MS);
+    worker.on('message', (m: { ok: boolean; report?: DiffReport; error?: string }) => {
+      if (m && m.ok && m.report) {
+        const report: DiffReport = m.report;
+        finish(() => resolve(report));
+      } else {
+        finish(() => reject(new Error((m && m.error) || '对比线程返回未知结果')));
+      }
+    });
+    worker.on('error', (err) => finish(() => reject(err)));
+    worker.on('exit', (code) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        reject(new Error(`对比线程异常退出（code=${code}）`));
+      }
+    });
+  });
+}
 
 function broadcastProgress(win: BrowserWindow | null, payload: DecompProgress) {
   const target = win || BrowserWindow.getAllWindows()[0];
@@ -69,11 +121,12 @@ export function registerIpcHandlers(ipcMain: IpcMain): void {
       broadcastProgress(win, { ...p, progress: scaled, label: `[修改版] ${p.label}` });
     });
 
-    broadcastProgress(win, { phase: 'comparing', label: '正在对比…', progress: 96 });
+    broadcastProgress(win, { phase: 'comparing', label: '正在对比反编译结果（大包可能需要数分钟，请耐心等待）…', progress: 96 });
 
     const usedFallback = resultOriginal.usedFallback || resultModified.usedFallback;
     const fallbackReason = resultOriginal.fallbackReason || resultModified.fallbackReason;
-    const report = await buildDiffReport({
+    // 在独立线程执行对比，主进程保持响应（窗口/日志/心跳不受影响）
+    const report = await runDiffWorker({
       sessionId,
       originalApk,
       modifiedApk,
