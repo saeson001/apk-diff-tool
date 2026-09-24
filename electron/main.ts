@@ -2,7 +2,7 @@ import { app, BrowserWindow, Menu, dialog, shell, ipcMain } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { IPC } from '../shared/types';
-import { ensureApktool, getApktoolJarPath, getApktoolVersion, getDebugData, getConfiguredJavaPath, setConfiguredJavaPath, getAISettings, setAISettings } from './apk-worker';
+import { ensureApktool, getApktoolJarPath, getApktoolVersion, getDebugData, getConfiguredJavaPath, setConfiguredJavaPath, getAISettings, setAISettings, purgeOrphanSessions } from './apk-worker';
 import { getAIRecommendation } from './ai-worker';
 import { getApkMetadata, startHashDiff } from './hash-diff';
 import { registerIpcHandlers } from './ipc-handlers';
@@ -18,7 +18,7 @@ if (typeof app === 'undefined' || app === null) {
 }
 
 /** 硬编码兜底版本号——当所有动态检测手段都失败时使用 */
-const FALLBACK_VERSION = '1.4.0';
+const FALLBACK_VERSION = '1.4.1';
 
 /** 版本检测方法记录，用于诊断"为什么版本号显示 unknown" */
 export interface VersionCheckMethod {
@@ -151,6 +151,10 @@ if (safeApp) {
   process.on('uncaughtException', (err) => {
     logger.error(`uncaughtException: ${err.message}`, err.stack);
     logger.flush();
+    // 弹窗告知用户，杜绝"无声闪退"（磁盘满等场景下日志可能写不出来，弹窗是最后防线）
+    try {
+      dialog.showErrorBox('APK Diff Tool 遇到内部错误', `${err.message}\n\n详细信息已尽量写入日志（工具 > 诊断信息可打开日志目录）。`);
+    } catch { /* ignore */ }
     safeApp.quit();
   });
   process.on('unhandledRejection', (reason) => {
@@ -364,6 +368,9 @@ async function main(): Promise<void> {
   });
 
   app.whenReady().then(async () => {
+    // 反编译产物只在内存会话中有效，启动时清理上次运行遗留的孤儿目录（每个可达数 GB）
+    purgeOrphanSessions();
+
     setupMenu();
     registerIpcHandlers(ipcMain);
 
