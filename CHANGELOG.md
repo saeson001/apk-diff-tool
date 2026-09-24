@@ -2,6 +2,14 @@
 
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本（SemVer）。
 
+## [1.3.10] - 2026-09-24
+
+### 修复
+
+- **修复 v1.3.9 双击 exe 完全无反应（无法启动）**：根因是 `node_modules/electron` 的 npm 占位 stub 被打进 app.asar，运行时主进程 `require('electron')` 优先命中 stub 返回字符串而非运行时模块，`app` 未定义导致进程静默退出。本版在 `electron-builder.yml` 的 `files` 中显式排除 `node_modules/electron/**`，确保 asar 内不再包含 stub
+- **新增主进程启动期 FATAL 自检**：`electron/main.ts` 启动时校验 `app` 模块可用性，若 `require('electron')` 返回异常内容则输出 `[FATAL]` 日志并退出码 1，便于用户日志定位，不再静默崩溃
+- **兜底版本号更新**：`FALLBACK_VERSION` 从 1.3.9 更新为 1.3.10
+
 ## [1.3.9] - 2026-09-24
 
 ### 修复
