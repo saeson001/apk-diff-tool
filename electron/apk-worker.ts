@@ -650,18 +650,21 @@ export function preflightDiskSpace(apkPath: string, outDir: string): void {
 
 /** 启动时清理上次运行遗留的孤儿会话目录（会话映射只在内存中，重启后必然失效） */
 export function purgeOrphanSessions(): void {
-  try {
-    const root = getDecompileRoot();
-    if (!fs.existsSync(root)) return;
-    for (const name of fs.readdirSync(root)) {
-      const full = path.join(root, name);
-      try {
-        fs.rmSync(full, { recursive: true, force: true });
-        logger.info(`purgeOrphanSessions: removed ${full}`);
-      } catch { /* 单个目录删除失败不阻塞启动 */ }
+  // 同时清理两处根目录：当前选择的根 + 旧版本遗留的 userData\apk-out（v1.4.0 及之前固定写 C 盘）
+  const roots = new Set<string>([getDecompileRoot(), path.join(app.getPath('userData'), 'apk-out')]);
+  for (const root of roots) {
+    try {
+      if (!fs.existsSync(root)) continue;
+      for (const name of fs.readdirSync(root)) {
+        const full = path.join(root, name);
+        try {
+          fs.rmSync(full, { recursive: true, force: true });
+          logger.info(`purgeOrphanSessions: removed ${full}`);
+        } catch { /* 单个目录删除失败不阻塞启动 */ }
+      }
+    } catch (err) {
+      logger.warn(`purgeOrphanSessions failed for ${root}: ${err instanceof Error ? err.message : String(err)}`);
     }
-  } catch (err) {
-    logger.warn(`purgeOrphanSessions failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
