@@ -12,6 +12,9 @@ const api: ApkDiffApi = {
   getClassDiff: (reportId, classPath) => ipcRenderer.invoke(IPC.GET_CLASS_DIFF, reportId, classPath),
   getResourceDiff: (reportId, resourcePath) => ipcRenderer.invoke(IPC.GET_RESOURCE_DIFF, reportId, resourcePath),
   getApktoolInfo: () => ipcRenderer.invoke(IPC.GET_APKTOOL_INFO),
+  getAppVersion: () => ipcRenderer.invoke(IPC.GET_APP_VERSION),
+  getVersionCheck: () => ipcRenderer.invoke(IPC.GET_VERSION_CHECK),
+  recheckVersion: () => ipcRenderer.invoke(IPC.RECHECK_VERSION),
   onProgress: (callback: (p: DecompProgress) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: DecompProgress) => callback(payload);
     ipcRenderer.on(IPC.ON_PROGRESS, listener);
@@ -19,7 +22,17 @@ const api: ApkDiffApi = {
   },
   getDebugInfo: () => ipcRenderer.invoke(IPC.GET_DEBUG_INFO),
   openLogDir: () => ipcRenderer.invoke(IPC.OPEN_LOG_DIR),
-  exportLog: () => ipcRenderer.invoke(IPC.EXPORT_LOG)
+  exportLog: () => ipcRenderer.invoke(IPC.EXPORT_LOG),
+  getJavaPath: () => ipcRenderer.invoke(IPC.GET_JAVA_PATH),
+  setJavaPath: (path) => ipcRenderer.invoke(IPC.SET_JAVA_PATH, path),
+  pickJavaPath: () => ipcRenderer.invoke(IPC.PICK_JAVA_PATH),
+  getAISettings: () => ipcRenderer.invoke(IPC.GET_AI_SETTINGS),
+  setAISettings: (s) => ipcRenderer.invoke(IPC.SET_AI_SETTINGS, s),
+  getApkMetadata: (apkPath) => ipcRenderer.invoke(IPC.GET_APK_METADATA, apkPath),
+  getAIRecommendation: (originalMeta, modifiedMeta) => ipcRenderer.invoke(IPC.GET_AI_RECOMMENDATION, originalMeta, modifiedMeta),
+  startHashDiff: (original, modified, recommendation) => ipcRenderer.invoke(IPC.START_HASH_DIFF, original, modified, recommendation),
+  getHashFileDiff: (sessionId, filePath) => ipcRenderer.invoke(IPC.GET_HASH_FILE_DIFF, sessionId, filePath),
+  sendAIChat: (messages, context) => ipcRenderer.invoke(IPC.AI_CHAT, messages, context)
 };
 
 contextBridge.exposeInMainWorld('apkDiff', api);
