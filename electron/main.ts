@@ -8,8 +8,17 @@ import { getApkMetadata, startHashDiff } from './hash-diff';
 import { registerIpcHandlers } from './ipc-handlers';
 import { logger } from './logger';
 
+// 启动时立即检查 Electron 环境
+if (typeof app === 'undefined' || app === null) {
+  try {
+    process.stderr.write('[FATAL] Electron app module not available.\n');
+    process.stderr.write('[FATAL] Electron version: ' + (process.versions.electron || 'not detected') + '\n');
+  } catch { /* ignore */ }
+  process.exit(1);
+}
+
 /** 硬编码兜底版本号——当所有动态检测手段都失败时使用 */
-const FALLBACK_VERSION = '1.3.9';
+const FALLBACK_VERSION = '1.3.10';
 
 /** 版本检测方法记录，用于诊断"为什么版本号显示 unknown" */
 export interface VersionCheckMethod {
@@ -133,18 +142,22 @@ function recheckVersion(): VersionCheckResult {
   return _cachedVersionCheck;
 }
 
-const isDev = !app.isPackaged || process.env.NODE_ENV === 'development';
+// 安全获取 app 对象（防止模块加载时 app 未定义导致崩溃）
+const safeApp = typeof app !== 'undefined' ? app : null;
+const isDev = !safeApp?.isPackaged || process.env.NODE_ENV === 'development';
 
 // 全局异常捕获：记录崩溃原因并 flush 日志缓冲，防止日志丢失
-process.on('uncaughtException', (err) => {
-  logger.error(`uncaughtException: ${err.message}`, err.stack);
-  logger.flush();
-  app.quit();
-});
-process.on('unhandledRejection', (reason) => {
-  logger.error(`unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`);
-  logger.flush();
-});
+if (safeApp) {
+  process.on('uncaughtException', (err) => {
+    logger.error(`uncaughtException: ${err.message}`, err.stack);
+    logger.flush();
+    safeApp.quit();
+  });
+  process.on('unhandledRejection', (reason) => {
+    logger.error(`unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`);
+    logger.flush();
+  });
+}
 
 function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
