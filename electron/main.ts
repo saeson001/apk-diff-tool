@@ -18,7 +18,7 @@ if (typeof app === 'undefined' || app === null) {
 }
 
 /** 硬编码兜底版本号——当所有动态检测手段都失败时使用 */
-const FALLBACK_VERSION = '1.4.1';
+const FALLBACK_VERSION = '1.4.2';
 
 /** 版本检测方法记录，用于诊断"为什么版本号显示 unknown" */
 export interface VersionCheckMethod {
