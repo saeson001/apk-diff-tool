@@ -213,9 +213,17 @@ function diffComponent(
 // smali / res 文件对比
 // -------------------------------------------------------------------------
 
-function walkSmali(dir: string): Map<string, string> {
+interface SmaliMeta {
+  abs: string;
+  /** 内容 sha256 前 16 位（不保留文件全文，防止数十万 smali 文件把内存打爆） */
+  hash: string;
+  size: number;
+  lines: number;
+}
+
+function walkSmali(dir: string): Map<string, SmaliMeta> {
   // 键：相对 root 的路径（smali/... 或 smali_classes2/...），不含 basename 前缀
-  const map = new Map<string, string>();
+  const map = new Map<string, SmaliMeta>();
   if (!fs.existsSync(dir)) return map;
   const walk = (d: string, prefix: string) => {
     if (!fs.existsSync(d)) return;
@@ -225,7 +233,12 @@ function walkSmali(dir: string): Map<string, string> {
       if (entry.isDirectory()) walk(abs, rel);
       else if (entry.isFile() && entry.name.endsWith('.smali')) {
         try {
-          map.set(rel, fs.readFileSync(abs, 'utf8'));
+          // 只保留哈希/大小/行数，绝不保留全文（v1.4.2 及之前保留全文导致大包 OOM 闪退）
+          const buf = fs.readFileSync(abs);
+          const hash = createHash('sha256').update(buf).digest('hex').slice(0, 16);
+          let lines = 0;
+          for (let i = 0; i < buf.length; i++) if (buf[i] === 0x0a) lines++;
+          map.set(rel, { abs, hash, size: buf.length, lines });
         } catch {
           // 跳过读取失败
         }
@@ -327,8 +340,8 @@ function makeUnifiedDiff(originalText: string, modifiedText: string): { patch: s
 }
 
 function diffSmaliClasses(
-  original: Map<string, string>,
-  modified: Map<string, string>
+  original: Map<string, SmaliMeta>,
+  modified: Map<string, SmaliMeta>
 ): ClassDiffEntry[] {
   const result: ClassDiffEntry[] = [];
   const allKeys = new Set([...original.keys(), ...modified.keys()]);
@@ -337,14 +350,13 @@ function diffSmaliClasses(
     const m = modified.get(rel);
     const className = rel.replace(/\.smali$/, '').replace(/\\/g, '.').replace(/\//g, '.');
     if (!o) {
-      const additions = (m || '').split('\n').length;
-      result.push({ path: rel, className, status: 'added', additions, deletions: 0 });
+      result.push({ path: rel, className, status: 'added', additions: m!.lines, deletions: 0 });
     } else if (!m) {
-      const deletions = o.split('\n').length;
-      result.push({ path: rel, className, status: 'removed', additions: 0, deletions });
-    } else if (o !== m) {
-      const { additions, deletions } = makeUnifiedDiff(o, m);
-      result.push({ path: rel, className, status: 'modified', additions, deletions });
+      result.push({ path: rel, className, status: 'removed', additions: 0, deletions: o.lines });
+    } else if (o.hash !== m.hash) {
+      // 哈希不同即判为修改；增删行数不在列表构建时计算（大包数十万类会拖垮耗时与内存），
+      // 单类完整 diff 由点击时懒加载 IPC 提供
+      result.push({ path: rel, className, status: 'modified' });
     } else {
       result.push({ path: rel, className, status: 'unchanged', additions: 0, deletions: 0 });
     }
