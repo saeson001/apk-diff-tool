@@ -652,20 +652,25 @@ export function preflightDiskSpace(apkPath: string, outDir: string): void {
 export function purgeOrphanSessions(): void {
   // 同时清理两处根目录：当前选择的根 + 旧版本遗留的 userData\apk-out（v1.4.0 及之前固定写 C 盘）
   const roots = new Set<string>([getDecompileRoot(), path.join(app.getPath('userData'), 'apk-out')]);
-  for (const root of roots) {
-    try {
-      if (!fs.existsSync(root)) continue;
-      for (const name of fs.readdirSync(root)) {
-        const full = path.join(root, name);
-        try {
-          fs.rmSync(full, { recursive: true, force: true });
-          logger.info(`purgeOrphanSessions: removed ${full}`);
-        } catch { /* 单个目录删除失败不阻塞启动 */ }
+  // 完全后台异步执行（v1.4.2 用同步 rmSync 删数十万小文件曾阻塞启动 60 分钟以上）
+  void (async () => {
+    for (const root of roots) {
+      try {
+        if (!fs.existsSync(root)) continue;
+        for (const name of fs.readdirSync(root)) {
+          const full = path.join(root, name);
+          try {
+            await fs.promises.rm(full, { recursive: true, force: true, maxRetries: 2 });
+            logger.info(`purgeOrphanSessions: removed ${full}`);
+          } catch (err) {
+            logger.warn(`purgeOrphanSessions: failed to remove ${full}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      } catch (err) {
+        logger.warn(`purgeOrphanSessions failed for ${root}: ${err instanceof Error ? err.message : String(err)}`);
       }
-    } catch (err) {
-      logger.warn(`purgeOrphanSessions failed for ${root}: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }
+  })();
 }
 
 /** 运行时 FIFO：会话目录超过上限时删除最旧的（防止单次运行内无限膨胀） */
