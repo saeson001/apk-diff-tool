@@ -24,17 +24,21 @@ import { ensureApktool, decompileApk, getAISettings } from './apk-worker';
 import { getClassUnifiedDiff, getResourceUnifiedDiff } from './diff-engine';
 import { getHashFileContentDiff } from './hash-diff';
 import { chatWithAI } from './ai-chat';
+import { logger } from './logger';
 import type { ChatMessage } from '../shared/types';
 
 // 保留每个 sessionId 对应的产物目录，供懒加载 IPC 使用
 const sessions = new Map<string, { originalDir: string; modifiedDir: string; report: DiffReport }>();
 
 const DIFF_WORKER_TIMEOUT_MS = 30 * 60 * 1000; // 与反编译超时一致
+// worker 独立堆上限：超限时只终止该线程并向上报错（ERR_WORKER_OUT_OF_MEMORY），
+// 不再像默认行为那样把整个进程一起 abort（v1.4.2 大包闪退的直接原因）
+const DIFF_WORKER_MAX_OLD_SPACE_MB = 2048;
 
 /**
  * 在 worker_threads 中执行 buildDiffReport。
- * 根因背景：全量对比超大反编译树（数十万文件）会阻塞主进程事件循环数分钟，
- * 导致窗口"未响应"、心跳/日志停止，被结束进程后表现为闪退（v1.4.1 及之前）。
+ * 根因背景：全量对比超大反编译树（数十万文件）若在主进程执行会阻塞事件循环数分钟，
+ * 且 worker 无内存上限时 OOM 会把整个进程带走（表现为静默闪退）。
  */
 function runDiffWorker(params: {
   sessionId: string;
@@ -48,7 +52,13 @@ function runDiffWorker(params: {
 }): Promise<DiffReport> {
   return new Promise<DiffReport>((resolve, reject) => {
     let settled = false;
-    const worker = new Worker(path.join(__dirname, 'diff-worker.js'), { workerData: { params } });
+    // 里程碑日志用 WARN（立即刷盘）：主进程若在对比阶段死亡，日志能明确区分死在哪一步
+    logger.warn(`[diff] worker starting: ${params.originalDir} vs ${params.modifiedDir}`);
+    const worker = new Worker(path.join(__dirname, 'diff-worker.js'), {
+      workerData: { params },
+      resourceLimits: { maxOldGenerationSizeMb: DIFF_WORKER_MAX_OLD_SPACE_MB, maxYoungGenerationSizeMb: 64 }
+    });
+    const t0 = Date.now();
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
@@ -59,21 +69,37 @@ function runDiffWorker(params: {
       if (!settled) {
         try { worker.terminate(); } catch { /* noop */ }
       }
-      finish(() => reject(new Error('对比超时（>30 分钟），已终止对比线程。')));
+      finish(() => {
+        logger.error(`[diff] worker TIMEOUT after ${Math.round((Date.now() - t0) / 1000)}s`);
+        reject(new Error('对比超时（>30 分钟），已终止对比线程。'));
+      });
     }, DIFF_WORKER_TIMEOUT_MS);
     worker.on('message', (m: { ok: boolean; report?: DiffReport; error?: string }) => {
       if (m && m.ok && m.report) {
         const report: DiffReport = m.report;
-        finish(() => resolve(report));
+        finish(() => {
+          logger.warn(`[diff] worker OK in ${Date.now() - t0}ms (classes=${report.classes.length}, resources=${report.resources.length})`);
+          resolve(report);
+        });
       } else {
-        finish(() => reject(new Error((m && m.error) || '对比线程返回未知结果')));
+        finish(() => {
+          logger.error(`[diff] worker failed: ${(m && m.error) || 'unknown'}`);
+          reject(new Error((m && m.error) || '对比线程返回未知结果'));
+        });
       }
     });
-    worker.on('error', (err) => finish(() => reject(err)));
+    worker.on('error', (err) => finish(() => {
+      const msg = (err as NodeJS.ErrnoException).code === 'ERR_WORKER_OUT_OF_MEMORY'
+        ? `对比内存超限（已用满 ${DIFF_WORKER_MAX_OLD_SPACE_MB}MB 线程堆上限），APK 过大无法完成完整对比，请改用快速哈希对比的文件级内容查看。`
+        : err.message;
+      logger.error(`[diff] worker error: ${msg}`);
+      reject(new Error(msg));
+    }));
     worker.on('exit', (code) => {
       if (!settled) {
         settled = true;
         clearTimeout(timeout);
+        logger.error(`[diff] worker EXITED unexpectedly code=${code}`);
         reject(new Error(`对比线程异常退出（code=${code}）`));
       }
     });
